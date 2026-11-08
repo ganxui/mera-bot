@@ -334,6 +334,10 @@ def main():
         run_demo()
         return
     load_env()
+    if not args.check and os.environ.get('MERA_PAUSED') == '1':
+        print('МЕРА ждёт переноса базы. Для запуска отключите MERA_PAUSED и перезапустите процесс.', flush=True)
+        while True:
+            time.sleep(30)
     token = os.environ.get('MAX_BOT_TOKEN', '')
     if not token:
         print('Токен пока не настроен. Заполните MAX_BOT_TOKEN в локальном .env.\n'
