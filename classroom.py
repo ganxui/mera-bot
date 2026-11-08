@@ -1,4 +1,7 @@
 """Вход по ролям, выбор предмета и личный кабинет класса."""
+import secrets
+from datetime import timedelta
+
 from mera import ROLE_LABELS, bounded_int, button, reply
 from subjects import SUBJECT_GROUPS, subject_name
 
@@ -34,13 +37,15 @@ class ClassroomMixin:
                         'ВЫБЕРИТЕ\nРОЛЬ', 'Начнём с класса')
         messages = super().menu(uid, prefix)
         if member['role'] != 'student':
-            messages[0]['attachments'][0]['payload']['buttons'].append([button('Личный кабинет', 'profile')])
+            messages[0]['attachments'][0]['payload']['buttons'].extend(
+                [[button('Личный кабинет', 'profile')], [button('Мои классы', 'classes:0')]])
         return messages
 
     def plan(self, uid, offset=0, page=0):
         messages = super().plan(uid, offset, page)
         rows = messages[0]['attachments'][0]['payload']['buttons']
         rows.insert(-1, [button('Личный кабинет', 'profile')])
+        rows.insert(-1, [button('Мои классы', 'classes:0')])
         return messages
 
     def route_input(self, uid, text, is_callback):
@@ -56,8 +61,6 @@ class ClassroomMixin:
     def _handle(self, uid, text):
         state = self.store.state(uid)
         if text in ('enroll:head', 'enroll:teacher', 'enroll:student'):
-            if self.store.member(uid):
-                return self.profile(uid)
             if text == 'enroll:head':
                 self.store.set_state(uid, {'step': 'create'})
                 return card('Выберите номер класса или напишите название, например 9А.',
@@ -72,7 +75,7 @@ class ClassroomMixin:
             self.store.set_state(uid, state)
             return self.invite_prompt(state)
         if text.startswith(('class_grade:', 'class_pick:')):
-            if state.get('step') != 'create' or self.store.member(uid):
+            if state.get('step') != 'create':
                 raise ValueError('Откройте создание класса заново через меню.')
             action, _, argument = text.partition(':')
             if action == 'class_grade':
@@ -84,17 +87,50 @@ class ClassroomMixin:
             grade, _, letter = argument.partition(':')
             if grade != str(state.get('grade')) or letter not in LETTERS:
                 raise ValueError('Выберите букву в актуальной карточке.')
-            return super()._handle(uid, grade + letter)
+            return self.create_class(uid, grade + letter)
         if text.startswith('catalog:'):
             return self.subject_picker(uid, text.split(':', 1)[1])
         if text.startswith('subject:') and state.get('step') in ('teacher_subject', 'profile_subject'):
             return self.accept_teacher_subject(uid, text.split(':', 1)[1])
         if text in ('profile', '/profile'):
             return self.profile(uid)
+        if text in ('/classes', 'classes'):
+            return self.classes_view(uid)
+        if text == 'classes:join':
+            self.store.set_state(uid, {})
+            return card('В какой роли хотите подключиться?', [[button('Учитель', 'enroll:teacher')],
+                        [button('Ученик', 'enroll:student')], [button('Назад', 'classes:0')]],
+                        'ВХОД\nВ КЛАСС', 'Понадобится код для вашей роли')
+        if text.startswith('classes:switch:'):
+            member = self.store.activate_class(uid, bounded_int(text.rsplit(':', 1)[1], 1, 2**63-1))
+            return self.menu(uid, f'Открыт класс {member["name"]}.\n\n')
+        if text.startswith('classes:'):
+            return self.classes_view(uid, bounded_int(text.split(':', 1)[1], 0, 999))
+        if text.startswith('classes_load:'):
+            return self.class_load_view(uid, bounded_int(text.split(':', 1)[1], 0, 999))
+        if text.startswith(('rotate_class:', 'rotate_class_ok:', 'limit_class:')):
+            member = self.require(uid, ('admin',))
+            action, _, parameters = text.partition(':')
+            class_id, _, value = parameters.partition(':')
+            if class_id != str(member['class_id']):
+                raise ValueError('Откройте актуальное управление классом.')
+            if action == 'limit_class':
+                minutes = bounded_int(value, 30, 600)
+                self.db.execute('UPDATE classes SET daily_limit=? WHERE id=?', (minutes, member['class_id']))
+                self.store.set_state(uid, {})
+                return self._handle(uid, 'manage')
+            if action == 'rotate_class':
+                token = secrets.token_hex(5)
+                self.store.set_state(uid, {'step': 'rotate_codes', 'token': token})
+                return [reply(f'Обновить коды для {member["name"]}? Старые приглашения перестанут действовать.',
+                              [[button('Обновить', f'rotate_class_ok:{class_id}:{token}')],
+                               [button('Отмена', 'profile')]])]
+            if state.get('step') != 'rotate_codes' or value != state.get('token'):
+                raise ValueError('Подтверждение устарело. Откройте управление классом.')
+            self.store.set_state(uid, {})
+            return super()._handle(uid, 'rotate')
         if text == 'profile_subject':
-            member = self.require(uid, ('teacher',))
-            if member['subject']:
-                return self.profile(uid)
+            self.require(uid, ('teacher',))
             self.store.set_state(uid, {'step': 'profile_subject'})
             return self.subject_picker(uid)
         if text == 'class_subject_add':
@@ -119,7 +155,7 @@ class ClassroomMixin:
         name = subject_name(name)
         if not name:
             return self.subject_picker(uid, error='Введите название предмета от 1 до 60 символов.')
-        if state.get('step') == 'teacher_subject' and not self.store.member(uid):
+        if state.get('step') == 'teacher_subject':
             state = {'step': 'join', 'expected_role': 'teacher', 'teacher_subject': name}
             self.store.set_state(uid, state)
             return self.invite_prompt(state)
@@ -136,8 +172,6 @@ class ClassroomMixin:
             raise ValueError('Откройте выбор предмета заново.')
         member = self.store.member(uid)
         onboarding = step == 'teacher_subject'
-        if onboarding and member:
-            return self.profile(uid)
         if not onboarding:
             self.require(uid, ('admin', 'teacher') if step == 'subject' else ('teacher',))
         target = 'menu' if onboarding or step == 'subject' else 'profile'
@@ -147,7 +181,7 @@ class ClassroomMixin:
             if member and member['subject'] and step == 'subject':
                 name = member['subject']
                 rows.append([button(name, f'subject:{name}')])
-            if member and self.store.class_subjects(member['class_id']):
+            if member and not onboarding and self.store.class_subjects(member['class_id']):
                 rows.append([button('Предметы класса', 'catalog:class:0')])
             rows.extend([button(label, f'catalog:{key}:0')] for key, (label, _) in SUBJECT_GROUPS.items())
             rows.append([button('Свой предмет', 'catalog:custom')])
@@ -159,7 +193,7 @@ class ClassroomMixin:
         else:
             group, _, page_text = screen.partition(':')
             page = bounded_int(page_text, 0, 999)
-            if group == 'class' and member:
+            if group == 'class' and member and not onboarding:
                 label = 'Предметы класса'
                 names = [row['name'] for row in self.store.class_subjects(member['class_id'])]
             elif group in SUBJECT_GROUPS:
@@ -187,19 +221,56 @@ class ClassroomMixin:
         rows = []
         if role == 'teacher':
             lines.append(f'Мой предмет — {member["subject"] or "пока не выбран"}.')
-            if not member['subject']:
-                rows.append([button('Выбрать предмет', 'profile_subject')])
+            rows.append([button('Изменить предмет' if member['subject'] else 'Выбрать предмет', 'profile_subject')])
         if role == 'student':
             rows.extend([[button('Мой план', 'plan'), button('Моё время', 'free')],
                          [button('Выполнено', 'completed')]])
         else:
             rows.append([button('Задания и статистика', 'tasks')])
         rows.append([button('Предметы класса', 'class_subjects:0')])
+        rows.append([button('Мои классы', 'classes:0')])
         if role == 'admin':
             rows.append([button('Управление классом', 'manage')])
         rows.extend([[button('Mera Agent', 'mera_agent')], [button('Главное меню', 'menu')]])
         return card('\n'.join(lines), rows, 'ЛИЧНЫЙ\nКАБИНЕТ', 'Ваш класс и настройки',
                     class_name=member['name'], role=ROLE_LABELS[role].capitalize(), subject=member['subject'])
+
+    def classes_view(self, uid, page=0):
+        self.store.set_state(uid, {})
+        current = self.store.member(uid)
+        classes = self.store.memberships(uid)
+        page = min(page, max(0, (len(classes) - 1) // PAGE_SIZE))
+        visible = classes[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+        lines = ['Мои классы', '']
+        rows = []
+        for entry in visible:
+            active = current and entry['class_id'] == current['class_id']
+            name = entry['name']
+            lines.append(f'{"✓ " if active else "• "}{name} · {ROLE_LABELS[entry["role"]]}'
+                         + (f' · {entry["subject"]}' if entry['subject'] else ''))
+            rows.append([button(f'{"✓ " if active else ""}{name}', f'classes:switch:{entry["class_id"]}')])
+        if not visible:
+            lines.append('Создайте класс или подключитесь по коду.')
+        rows.extend(pages(page, len(classes), 'classes'))
+        rows.extend([[button('Создать класс', 'enroll:head')], [button('Войти по коду', 'classes:join')],
+                     [button('Главное меню', 'menu')]])
+        return card('\n'.join(lines), rows, 'МОИ\nКЛАССЫ', 'Выберите класс для работы')
+
+    def class_load_view(self, uid, page=0):
+        self.require(uid)
+        self.store.set_state(uid, {})
+        classes = self.store.memberships(uid)
+        page = min(page, (len(classes) - 1) // PAGE_SIZE)
+        lines = ['Нагрузка моих классов · ближайшие 7 дней']
+        start = self.today().isoformat()
+        end = (self.today() + timedelta(days=6)).isoformat()
+        for entry in classes[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]:
+            totals = [row[0] for row in self.db.execute('''SELECT SUM(minutes) FROM tasks
+                WHERE class_id=? AND due BETWEEN ? AND ? GROUP BY due''', (entry['class_id'], start, end))]
+            lines.append(f'{entry["name"]} · {sum(totals)} мин за неделю · пик {max(totals, default=0)} мин/день')
+        return card('\n'.join(lines), pages(page, len(classes), 'classes_load') +
+                    [[button('Мои классы', 'classes:0')]],
+                    'НАГРУЗКА\nКЛАССОВ', 'Ближайшие семь дней')
 
     def class_subject_prompt(self, uid, error=''):
         member = self.require(uid, ('admin', 'teacher'))

@@ -242,9 +242,10 @@ def run_polling(store, api):
     estimate_key = os.environ.get('DEEPSEEK_API_KEY', '').strip()
     estimator = DeepSeekEstimator(estimate_key) if estimate_key else None
     command_parser = DeepSeekCommandParser(estimate_key) if estimate_key else None
-    engine = Engine(store, estimator=estimator, command_parser=command_parser)
+    engine = Engine(store, estimator=estimator, command_parser=command_parser, max_demo=True)
     print(f'Автоматическая оценка времени: {"включена" if estimator else "выключена"}.', flush=True)
     print(f'Mera Agent: {"расширенный" if command_parser else "базовый"} режим.', flush=True)
+    print('Демо в MAX и переключение классов включены.', flush=True)
     print('МЕРА запущена в MAX (демонстрационный Long Polling). Ctrl+C — остановить.', flush=True)
     delay = 2
     while True:

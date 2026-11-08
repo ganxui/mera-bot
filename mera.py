@@ -13,6 +13,11 @@ from subjects import subject_key
 
 WEEKDAYS = ('Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс')
 ROLE_LABELS = {'admin': 'классный руководитель', 'teacher': 'учитель', 'student': 'ученик'}
+
+
+def class_key(value):
+    return re.sub(r'[\s\-–«»"]+', '', value.casefold()).translate(
+        str.maketrans('abcehkmoptxy', 'авсенкмортху'))
 MONTHS = ('января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря')
 MONTH_TITLES = ('Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь')
 
@@ -105,6 +110,17 @@ class Store:
                 user_id INTEGER PRIMARY KEY REFERENCES members(user_id) ON DELETE CASCADE,
                 subject_id INTEGER NOT NULL REFERENCES class_subjects(id)
             );
+            CREATE TABLE IF NOT EXISTS class_memberships (
+                user_id INTEGER NOT NULL, class_id INTEGER NOT NULL REFERENCES classes(id),
+                role TEXT NOT NULL CHECK(role IN ('admin','teacher','student')),
+                subject_id INTEGER REFERENCES class_subjects(id), PRIMARY KEY(user_id,class_id)
+            );
+            CREATE INDEX IF NOT EXISTS class_memberships_class ON class_memberships(class_id,role);
+            CREATE TABLE IF NOT EXISTS class_teacher_defaults (
+                user_id INTEGER NOT NULL, class_id INTEGER NOT NULL REFERENCES classes(id),
+                subject TEXT NOT NULL, body TEXT NOT NULL, minutes INTEGER NOT NULL,
+                PRIMARY KEY(user_id,class_id)
+            );
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY, class_id INTEGER NOT NULL REFERENCES classes(id),
                 creator INTEGER NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL,
@@ -155,6 +171,19 @@ class Store:
         self.db.execute('''INSERT OR IGNORE INTO teacher_defaults(user_id,subject,body,minutes)
             SELECT t.creator,t.subject,t.body,t.minutes FROM tasks t
             WHERE t.rowid=(SELECT MAX(recent.rowid) FROM tasks recent WHERE recent.creator=t.creator)''')
+        self.db.execute('''INSERT OR IGNORE INTO class_memberships(user_id,class_id,role,subject_id)
+            SELECT m.user_id,m.class_id,m.role,s.id FROM members m
+            LEFT JOIN teacher_subjects p ON p.user_id=m.user_id
+            LEFT JOIN class_subjects s ON s.id=p.subject_id AND s.class_id=m.class_id''')
+        self.db.execute('''INSERT OR IGNORE INTO class_teacher_defaults(user_id,class_id,subject,body,minutes)
+            SELECT t.creator,t.class_id,t.subject,t.body,t.minutes FROM tasks t
+            WHERE t.rowid=(SELECT MAX(recent.rowid) FROM tasks recent
+                           WHERE recent.creator=t.creator AND recent.class_id=t.class_id)''')
+        if not self.db.execute("SELECT 1 FROM metadata WHERE key='class_memberships_v1'").fetchone():
+            self.db.execute('''INSERT OR IGNORE INTO class_teacher_defaults
+                SELECT m.user_id,m.class_id,d.subject,d.body,d.minutes FROM members m
+                JOIN teacher_defaults d ON d.user_id=m.user_id''')
+            self.db.execute("INSERT OR IGNORE INTO metadata VALUES ('class_memberships_v1','1')")
         if not self.db.execute("SELECT 1 FROM metadata WHERE key='class_subjects_v1'").fetchone():
             with self.db:
                 for row in self.db.execute('SELECT DISTINCT class_id,subject FROM tasks'):
@@ -165,9 +194,35 @@ class Store:
     def member(self, uid):
         return self.db.execute('''SELECT m.*,c.name,c.daily_limit,c.student_code,c.teacher_code,s.name AS subject
             FROM members m JOIN classes c ON c.id=m.class_id
-            LEFT JOIN teacher_subjects p ON p.user_id=m.user_id
+            LEFT JOIN class_memberships p ON p.user_id=m.user_id AND p.class_id=m.class_id
             LEFT JOIN class_subjects s ON s.id=p.subject_id AND s.class_id=m.class_id
             WHERE m.user_id=?''', (uid,)).fetchone()
+
+    def memberships(self, uid):
+        return self.db.execute('''SELECT m.class_id,m.role,c.name,c.daily_limit,s.name AS subject
+            FROM class_memberships m JOIN classes c ON c.id=m.class_id
+            LEFT JOIN class_subjects s ON s.id=m.subject_id AND s.class_id=m.class_id
+            WHERE m.user_id=? ORDER BY c.name COLLATE NOCASE,m.class_id''', (uid,)).fetchall()
+
+    def activate_class(self, uid, class_id):
+        row = self.db.execute('SELECT role FROM class_memberships WHERE user_id=? AND class_id=?',
+                              (uid, class_id)).fetchone()
+        if not row:
+            raise ValueError('Этот класс недоступен для вашего аккаунта.')
+        self.db.execute('''INSERT INTO members VALUES (?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET class_id=excluded.class_id,role=excluded.role''',
+            (uid, class_id, row['role']))
+        self.set_state(uid, {})
+        return self.member(uid)
+
+    def enroll(self, uid, class_id, role):
+        self.db.execute('INSERT OR IGNORE INTO class_memberships(user_id,class_id,role) VALUES (?,?,?)',
+                        (uid, class_id, role))
+        return self.activate_class(uid, class_id)
+
+    def teacher_default(self, uid, class_id):
+        return self.db.execute('SELECT * FROM class_teacher_defaults WHERE user_id=? AND class_id=?',
+                               (uid, class_id)).fetchone()
 
     def ensure_class_subject(self, class_id, name):
         key = subject_key(name)
@@ -178,12 +233,12 @@ class Store:
 
     def set_teacher_subject(self, uid, class_id, name):
         subject_id = self.ensure_class_subject(class_id, name)
-        self.db.execute('''INSERT INTO teacher_subjects(user_id,subject_id) VALUES (?,?)
-            ON CONFLICT(user_id) DO UPDATE SET subject_id=excluded.subject_id''', (uid, subject_id))
+        self.db.execute('UPDATE class_memberships SET subject_id=? WHERE user_id=? AND class_id=? AND role=?',
+                        (subject_id, uid, class_id, 'teacher'))
 
     def class_subjects(self, class_id):
         rows = self.db.execute('''SELECT s.name,COUNT(p.user_id) AS teachers FROM class_subjects s
-            LEFT JOIN teacher_subjects p ON p.subject_id=s.id
+            LEFT JOIN class_memberships p ON p.subject_id=s.id AND p.class_id=s.class_id AND p.role='teacher'
             WHERE s.class_id=? GROUP BY s.id''', (class_id,))
         return sorted(rows, key=lambda row: subject_key(row['name']))
 
@@ -253,7 +308,8 @@ class LegacyEngine:
             except ValueError as exc:
                 messages = [reply(str(exc), [[button('Отмена', 'menu')]])]
             for message in messages:
-                message.setdefault('_visual', self.visual(uid, text, message))
+                if '_visual' not in message:
+                    message['_visual'] = self.visual(uid, text, message)
                 if source_mid:
                     message['_source_mid'] = source_mid
             if event_id:
@@ -360,7 +416,8 @@ class LegacyEngine:
                 'Передавайте учительский код только учителям.\n'
                 f'Порог нагрузки: {member["daily_limit"]} мин/день. Это настройка пилота.',
                 [[button('Предметы класса', 'class_subjects:0')],
-                 [button('Изменить порог', 'limit')], [button('Обновить коды', 'rotate')],
+                 [button('Изменить порог', 'limit')],
+                 [button('Обновить коды', f'rotate_class:{member["class_id"]}')],
                  [button('Главное меню', 'menu')]])]
         if text == 'limit':
             self.require(uid, ('admin',))
@@ -456,13 +513,7 @@ class LegacyEngine:
             self.store.set_state(uid, state)
             return self.date_picker(uid) if action == 'move' else self.minute_picker(uid)
         if step == 'create':
-            if not 1 <= len(text) <= 40:
-                raise ValueError('Название класса: от 1 до 40 символов.')
-            cursor = self.db.execute('INSERT INTO classes(name,daily_limit,student_code,teacher_code) VALUES (?,?,?,?)',
-                (text, 180, secrets.token_hex(5).upper(), secrets.token_hex(5).upper()))
-            self.db.execute('INSERT INTO members VALUES (?,?,?)', (uid, cursor.lastrowid, 'admin'))
-            self.store.set_state(uid, {})
-            return self._handle(uid, 'manage')
+            return self.create_class(uid, text)
         if step == 'join':
             code = text.upper()
             row = self.db.execute('SELECT * FROM classes WHERE student_code=? OR teacher_code=?', (code, code)).fetchone()
@@ -473,8 +524,8 @@ class LegacyEngine:
             role = 'teacher' if code == row['teacher_code'] else 'student'
             if state.get('expected_role') and role != state['expected_role']:
                 return self.invite_prompt(state, 'Этот код для другой роли. Запросите подходящий код у классного руководителя.')
-            self.db.execute('INSERT INTO members VALUES (?,?,?)', (uid, row['id'], role))
-            if role == 'teacher' and state.get('teacher_subject'):
+            member = self.store.enroll(uid, row['id'], role)
+            if member['role'] == 'teacher' and not member['subject'] and state.get('teacher_subject'):
                 self.store.set_teacher_subject(uid, row['id'], state['teacher_subject'])
             self.store.set_state(uid, {})
             if state.get('expected_role') == 'teacher':
@@ -529,6 +580,19 @@ class LegacyEngine:
                 return self.minute_picker(uid)
             return [reply(prompt, [[button('Отмена', 'menu')]])]
         return self.menu(uid, 'Используйте кнопки или /help.\n\n')
+
+    def create_class(self, uid, name):
+        if not 1 <= len(name) <= 40:
+            raise ValueError('Название класса: от 1 до 40 символов.')
+        if re.fullmatch(r'\d{1,2}\s*[-–]?\s*[а-яa-z]', name, re.IGNORECASE):
+            name = class_key(name).upper()
+        if any(row['role'] == 'admin' and class_key(row['name']) == class_key(name)
+               for row in self.store.memberships(uid)):
+            raise ValueError('У вас уже есть такой класс. Откройте «Мои классы».')
+        cursor = self.db.execute('INSERT INTO classes(name,daily_limit,student_code,teacher_code) VALUES (?,?,?,?)',
+            (name, 180, secrets.token_hex(5).upper(), secrets.token_hex(5).upper()))
+        self.store.enroll(uid, cursor.lastrowid, 'admin')
+        return self._handle(uid, 'manage')
 
     def preview(self, uid, draft):
         member = self.require(uid, ('admin', 'teacher'))
@@ -710,7 +774,7 @@ class LegacyEngine:
         elif action in ('manage', '/class', 'rotate') or message['text'].startswith('Управление ·'):
             base.update(kind='manage', title='УПРАВЛЕНИЕ\nКЛАССОМ', subtitle='Учителя и ученики — одна команда')
             if member:
-                base['role_counts'] = {role: self.db.execute('SELECT COUNT(*) FROM members WHERE class_id=? AND role=?',
+                base['role_counts'] = {role: self.db.execute('SELECT COUNT(*) FROM class_memberships WHERE class_id=? AND role=?',
                     (member['class_id'], role)).fetchone()[0] for role in ('admin','teacher','student')}
         elif action.startswith(('done:', 'actual:', 'actual_custom:')) or step == 'actual':
             base.update(kind='done', title='ЕЩЁ ОДНО\nГОТОВО', subtitle='Шаг за шагом — к свободному вечеру')
@@ -784,9 +848,11 @@ class LegacyEngine:
             rows.append(nav)
         if overdue:
             rows.append([button(f'Просрочено: {len(overdue)}', 'plan:-1:0')])
-        last_partial=self.db.execute('''SELECT l.token FROM study_log l LEFT JOIN done d
+        last_partial=self.db.execute('''SELECT l.token FROM study_log l JOIN tasks t ON t.id=l.task_id
+            LEFT JOIN done d
             ON d.user_id=l.user_id AND d.task_id=l.task_id
-            WHERE l.user_id=? AND l.task_id IS NOT NULL AND d.task_id IS NULL ORDER BY l.id DESC LIMIT 1''',(uid,)).fetchone()
+            WHERE l.user_id=? AND t.class_id=? AND d.task_id IS NULL ORDER BY l.id DESC LIMIT 1''',
+            (uid,member['class_id'])).fetchone()
         if last_partial:
             rows.append([button('Отменить последнюю часть','undo_work:'+last_partial['token'])])
         rows.append([button('Сегодня могу…','today_time'),button('Выполнено','completed')])
@@ -847,7 +913,8 @@ class LegacyEngine:
 from workflows import WorkflowMixin
 from agent import AgentMixin
 from classroom import ClassroomMixin
+from demo_max import DemoMixin
 
 
-class Engine(AgentMixin, ClassroomMixin, WorkflowMixin, LegacyEngine):
+class Engine(DemoMixin, AgentMixin, ClassroomMixin, WorkflowMixin, LegacyEngine):
     """Текущие сценарии поверх совместимого ядра хранения и диалога."""

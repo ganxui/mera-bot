@@ -3,7 +3,7 @@ import re
 import secrets
 from datetime import timedelta
 
-from mera import ROLE_LABELS, WEEKDAYS, button, parse_date, reply
+from mera import ROLE_LABELS, WEEKDAYS, button, class_key, parse_date, reply
 
 
 ENTRY = 'mera_agent'
@@ -17,9 +17,12 @@ ADD_TARGET = re.compile(
     rf'^(?:добавь(?:те)?|задай(?:те)?|создай(?:те)?)\s+'
     rf'(?:в\s+)?(?:класс\s+)?({CLASS_LABEL})\s+(?:дз|(?:домашнее )?задание)\b',
     re.IGNORECASE)
-ADD_SUBJECT = re.compile(rf'^(?:добавь|создай)\s+(?:новый\s+)?предмет\s+(.+?)'
-                         rf'(?:\s+(?:в|для)\s+(?:класс[ае]?\s+)?({CLASS_LABEL}))?$',
-                         re.IGNORECASE)
+ADD_SUBJECT = re.compile(
+    rf'^(?:добавь|создай|внеси)(?:те)?\s+'
+    rf'(?:(?:(?:в|для)\s+)?(?:класс[ауе]?\s+)?(?P<before>{CLASS_LABEL})\s+|(?:классу|в класс)\s+)?'
+    rf'(?:новый\s+)?предмет\s*[:—-]?\s+(?P<subject>.+?)'
+    rf'(?:\s+(?:в|для)\s+(?:класс[ае]?\s+)?(?P<after>{CLASS_LABEL}))?$',
+    re.IGNORECASE)
 MINUTES = re.compile(
     r'\s+на\s+(\d{1,3})\s*(?:(мин(?:ут[ауы]?)?)|ч(?:ас(?:а|ов)?)?'
     r'(?:\s+(\d{1,2})\s*мин(?:ут[ауы]?)?)?)(?:\.|\s|$)', re.IGNORECASE)
@@ -45,17 +48,21 @@ SHORTCUTS = {
     'моё время': 'availability', 'мое время': 'availability',
     'время на сегодня': 'today_time', 'личный кабинет': 'profile', 'профиль': 'profile',
     'управление классом': 'manage', 'настройки класса': 'manage', 'коды класса': 'manage',
+    'коды': 'manage', 'кабинет': 'profile',
+    'предметы класса': 'class_subjects', 'список предметов': 'class_subjects',
+    'мои классы': 'classes', 'все классы': 'classes', 'список классов': 'classes',
+    'нагрузку всех классов': 'all_load', 'нагрузку по всем классам': 'all_load',
+    'нагрузка всех классов': 'all_load', 'нагрузка по всем классам': 'all_load',
+    'подключись к классу': 'join_class', 'войти в класс': 'join_class',
+    'создай класс': 'create_class', 'добавь класс': 'create_class',
+    'мой предмет': 'profile', 'измени мой предмет': 'profile_subject',
+    'обнови коды': 'rotate_codes', 'обнови коды класса': 'rotate_codes',
     'быстрое дз': 'quick', 'повтори последнее задание': 'repeat',
     'добавь задание': 'add', 'добавь дз': 'add',
 }
 LESSON_NAMES = {'понедельнику': 'понедельник', 'вторнику': 'вторник', 'среде': 'среда',
                 'четвергу': 'четверг', 'пятнице': 'пятница', 'субботе': 'суббота',
                 'воскресенью': 'воскресенье'}
-
-
-def class_key(value):
-    return re.sub(r'[\s\-–«»"]+', '', value.casefold()).translate(
-        str.maketrans('abcehkmoptxy', 'авсенкмортху'))
 
 
 def text_field(command, key, limit):
@@ -72,15 +79,29 @@ def time_field(command, minimum=1):
 
 
 def local_command(text):
-    plain = text.lower().rstrip('?.!').removeprefix('покажи ').strip()
+    plain = text.casefold().rstrip('?.!').removeprefix('покажи ').removeprefix('открой ').strip()
     if plain in SHORTCUTS:
         return {'action': SHORTCUTS[plain]}
+    match = re.fullmatch(rf'(?:(?:переключись|перейди)\s+(?:на|в)\s+|класс\s+)?({CLASS_LABEL})', plain)
+    if match:
+        return {'action': 'switch_class', 'class_name': match[1]}
+    match = re.fullmatch(rf'(.+?)\s+(?:(?:для|в)\s+)?({CLASS_LABEL})', plain)
+    if match and match[1] in SHORTCUTS:
+        return {'action': SHORTCUTS[match[1]], 'class_name': match[2]}
+    match = re.fullmatch(rf'(?:измени|установи|поставь)\s+порог(?:\s+класса)?'
+                         rf'(?:\s+({CLASS_LABEL}))?\s+(?:на\s+)?(\d{{1,3}})(?:\s+мин(?:ут)?)?', plain)
+    if match:
+        return {'action': 'limit', 'class_name': match[1], 'minutes': int(match[2])}
+    match = re.fullmatch(r'(?:измени|поменяй)\s+(?:мой\s+)?предмет\s+на\s+(.+)', text, re.IGNORECASE)
+    if match:
+        return {'action': 'profile_subject', 'subject': match[1].strip(' «»"')}
     match = re.fullmatch(r'(?:мой )?план на (сегодня|завтра|послезавтра)', plain)
     if match:
         return {'action': 'plan', 'date': match[1]}
     match = ADD_SUBJECT.fullmatch(text)
     if match:
-        return {'action': 'class_subject', 'subject': match[1].strip(' «»"'), 'class_name': match[2]}
+        return {'action': 'class_subject', 'subject': match['subject'].strip(' «»"'),
+                'class_name': match['before'] or match['after']}
     header, separator, body = text.partition(':')
     match = ADD_HEADER.fullmatch(header.strip()) if separator and body.strip() else None
     if not match:
@@ -147,11 +168,12 @@ class AgentMixin:
             example = '«Покажи план на завтра» или «Отметь алгебру готовой».'
             first = [button('Мой план', 'plan'), button('Моё время', 'free')]
         else:
-            example = f'«Добавь {member["name"]} задание по алгебре к пятнице на 30 минут: решить № 12–15».'
+            example = f'«Покажи задания {member["name"]}» или «Добавь классу предмет Робототехника».'
             first = [button('Добавить задание', 'add'), button('Задания', 'tasks')]
         message = reply(f'{error}Mera Agent · {member["name"]}\n\n{example}\n'
                         'Пишите команды без имён, контактов и кодов доступа.',
-                        [first, [button('Нагрузка', 'load'), button('Меню', 'menu')]])
+                        [first, [button('Нагрузка', 'load'), button('Мои классы', 'classes:0')],
+                         [button('Личный кабинет', 'profile')], [button('Меню', 'menu')]])
         message['_visual'] = {'kind': 'help', 'title': 'MERA\nAGENT', 'subtitle': 'Напишите, что нужно сделать',
                               'class_name': member['name'], 'role': ROLE_LABELS[member['role']].capitalize()}
         return [message]
@@ -163,8 +185,9 @@ class AgentMixin:
         if PRIVATE.search(text):
             return self.agent_prompt(uid, 'Уберите контакты и коды доступа из команды.\n\n')
         explicit_target = ADD_TARGET.match(text)
-        if explicit_target and class_key(explicit_target[1]) != class_key(member['name']):
-            return self.agent_prompt(uid, f'В этом аккаунте доступен класс {member["name"]}.\n\n')
+        memberships = self.store.memberships(uid)
+        if explicit_target and not any(class_key(row['name']) == class_key(explicit_target[1]) for row in memberships):
+            return self.agent_class_error(uid, memberships)
         local = command or local_command(text)
         command = local
         if command is None and self.command_parser and text:
@@ -172,11 +195,49 @@ class AgentMixin:
         if not isinstance(command, dict):
             command = {}
         action = text_field(command, 'action', 20)
-        target = text_field(command, 'class_name', 40)
-        if target and class_key(target) != class_key(member['name']):
-            return self.agent_prompt(uid, f'В этом аккаунте доступен класс {member["name"]}.\n\n')
-        if local and action == 'class_subject':
-            return self.add_class_subject(uid, text_field(command, 'subject', 60))
+        target = explicit_target[1] if explicit_target else text_field(command, 'class_name', 40)
+        if target and action not in ('join_class', 'create_class'):
+            matches = [row for row in memberships if class_key(row['name']) == class_key(target)]
+            if not matches:
+                return self.agent_class_error(uid, memberships)
+            if len(matches) > 1:
+                messages = self.classes_view(uid)
+                messages[0]['text'] = 'Есть несколько классов с таким названием. Выберите нужный.\n\n' + messages[0]['text']
+                return messages
+            if matches[0]['class_id'] != member['class_id']:
+                member = self.store.activate_class(uid, matches[0]['class_id'])
+        if action == 'switch_class':
+            return self.agent_prompt(uid, f'Открыт класс {member["name"]}.\n\n') if target else self.classes_view(uid)
+        if action == 'classes':
+            return self.classes_view(uid)
+        if action == 'all_load':
+            return self.class_load_view(uid)
+        if action in ('join_class', 'create_class'):
+            route = 'classes:join' if action == 'join_class' else 'enroll:head'
+            if action == 'create_class' and target:
+                return self.create_class(uid, target)
+            return self._handle(uid, route)
+        if action == 'class_subjects':
+            return self.class_subject_view(uid, 0)
+        if action == 'class_subject':
+            name = text_field(command, 'subject', 60)
+            if local or name and name.casefold() in text.casefold():
+                return self.add_class_subject(uid, name)
+            return self.class_subject_prompt(uid)
+        if action == 'profile_subject':
+            messages = self._handle(uid, 'profile_subject')
+            name = text_field(command, 'subject', 60)
+            return self.accept_teacher_subject(uid, name) if name and name.casefold() in text.casefold() else messages
+        if action == 'rotate_codes':
+            return self._handle(uid, f'rotate_class:{member["class_id"]}')
+        if action == 'limit':
+            self.require(uid, ('admin',))
+            minutes = time_field(command, minimum=30)
+            if minutes is None:
+                return self._handle(uid, 'limit')
+            return [reply(f'{member["name"]} · порог {minutes} мин/день. Сохранить?',
+                          [[button('Сохранить', f'limit_class:{member["class_id"]}:{minutes}')],
+                           [button('Отмена', 'manage')]])]
         if action == 'add':
             self.require(uid, ('teacher', 'admin'))
             draft = {key: value for key, value in (
@@ -226,6 +287,11 @@ class AgentMixin:
                 message.setdefault('_visual', self.visual(uid, route, message))
             return messages
         return self.agent_prompt(uid, 'Не понял команду. Напишите одно действие.\n\n')
+
+    def agent_class_error(self, uid, memberships):
+        if len(memberships) == 1:
+            return self.agent_prompt(uid, f'В этом аккаунте доступен класс {memberships[0]["name"]}.\n\n')
+        return self.agent_prompt(uid, 'Запрошенный класс не подключён. Откройте «Мои классы».\n\n')
 
     def agent_date(self, command, key='date'):
         value = text_field(command, key, 24)

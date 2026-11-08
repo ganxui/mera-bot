@@ -53,7 +53,7 @@ class WorkflowMixin:
             if prefix:messages[0]['text']=prefix+messages[0]['text']
             return messages
         messages=super().menu(uid,prefix)
-        if member and self.db.execute('SELECT 1 FROM teacher_defaults WHERE user_id=?',(uid,)).fetchone():
+        if member and self.store.teacher_default(uid, member['class_id']):
             rows=messages[0]['attachments'][0]['payload']['buttons']
             rows.insert(1,[button('Быстрое ДЗ','add_quick'),button('Повторить','repeat_last')])
         return messages
@@ -62,10 +62,10 @@ class WorkflowMixin:
         state=self.store.state(uid)
         step=state.get('step')
         if text in ('add', '/add'):
-            self.require(uid, ('admin', 'teacher'))
+            member = self.require(uid, ('admin', 'teacher'))
             self.store.set_state(uid, {'step': 'subject', 'draft': {}, 'deadline_mode': 'lesson'})
             messages = self.subject_picker(uid)
-            if self.db.execute('SELECT 1 FROM teacher_defaults WHERE user_id=?', (uid,)).fetchone():
+            if self.store.teacher_default(uid, member['class_id']):
                 messages[0]['attachments'][0]['payload']['buttons'].insert(0, [button('Быстрое ДЗ', 'add_quick')])
             return messages
         if text == 'own_minutes' or text.startswith('estimate:'):
@@ -150,6 +150,9 @@ class WorkflowMixin:
             self.require(uid,('student',));token=text.split(':')[1]
             row=self.db.execute('SELECT * FROM study_log WHERE token=? AND user_id=?',(token,uid)).fetchone()
             if not row:return self.plan(uid)
+            if row['task_id'] is None:
+                raise ValueError('Задание больше недоступно.')
+            self.task(uid, row['task_id'])
             if self.db.execute('SELECT 1 FROM done WHERE user_id=? AND task_id=?',(uid,row['task_id'])).fetchone():
                 raise ValueError('Сначала отмените отметку всего задания в «Выполнено».')
             latest=self.db.execute('SELECT MAX(id) FROM study_log WHERE user_id=? AND task_id=?',(uid,row['task_id'])).fetchone()[0]
@@ -157,8 +160,8 @@ class WorkflowMixin:
             self.db.execute('DELETE FROM study_log WHERE id=?',(row['id'],))
             return self.plan(uid)
         if text in ('add_quick','repeat_last'):
-            self.require(uid,('admin','teacher'))
-            saved=self.db.execute('SELECT * FROM teacher_defaults WHERE user_id=?',(uid,)).fetchone()
+            member=self.require(uid,('admin','teacher'))
+            saved=self.store.teacher_default(uid,member['class_id'])
             if not saved:raise ValueError('Сначала опубликуйте первое задание обычным способом.')
             draft={'subject':saved['subject'],'minutes':saved['minutes']}
             if self.estimator:
@@ -373,7 +376,8 @@ class WorkflowMixin:
                 (task_id,member['class_id'],uid,draft['subject'],draft['body'],draft['due'],draft['minutes']));revision=0
         self.db.execute('INSERT OR REPLACE INTO task_details VALUES (?,?,?,?)',
             (task_id,draft.get('lesson_due'),revision,self.today().isoformat()))
-        self.db.execute('INSERT OR REPLACE INTO teacher_defaults VALUES (?,?,?,?)',(uid,draft['subject'],draft['body'],draft['minutes']))
+        self.db.execute('INSERT OR REPLACE INTO class_teacher_defaults VALUES (?,?,?,?,?)',
+                        (uid,member['class_id'],draft['subject'],draft['body'],draft['minutes']))
         self.store.ensure_class_subject(member['class_id'], draft['subject'])
         self.store.set_state(uid,{})
         if state.get('agent_draft'):
