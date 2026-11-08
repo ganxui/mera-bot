@@ -117,6 +117,12 @@ class Store:
                 subject_id INTEGER REFERENCES class_subjects(id), PRIMARY KEY(user_id,class_id)
             );
             CREATE INDEX IF NOT EXISTS class_memberships_class ON class_memberships(class_id,role);
+            CREATE TABLE IF NOT EXISTS student_records (
+                id INTEGER PRIMARY KEY, class_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '', UNIQUE(class_id,user_id),
+                FOREIGN KEY(user_id,class_id) REFERENCES class_memberships(user_id,class_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS student_records_class ON student_records(class_id,id);
             CREATE TABLE IF NOT EXISTS class_teacher_defaults (
                 user_id INTEGER NOT NULL, class_id INTEGER NOT NULL REFERENCES classes(id),
                 subject TEXT NOT NULL, body TEXT NOT NULL, minutes INTEGER NOT NULL,
@@ -176,6 +182,8 @@ class Store:
             SELECT m.user_id,m.class_id,m.role,s.id FROM members m
             LEFT JOIN teacher_subjects p ON p.user_id=m.user_id
             LEFT JOIN class_subjects s ON s.id=p.subject_id AND s.class_id=m.class_id''')
+        self.db.execute('''INSERT OR IGNORE INTO student_records(class_id,user_id)
+            SELECT class_id,user_id FROM class_memberships WHERE role='student' ORDER BY rowid''')
         self.db.execute('''INSERT OR IGNORE INTO class_teacher_defaults(user_id,class_id,subject,body,minutes)
             SELECT t.creator,t.class_id,t.subject,t.body,t.minutes FROM tasks t
             WHERE t.rowid=(SELECT MAX(recent.rowid) FROM tasks recent
@@ -219,7 +227,11 @@ class Store:
     def enroll(self, uid, class_id, role):
         self.db.execute('INSERT OR IGNORE INTO class_memberships(user_id,class_id,role) VALUES (?,?,?)',
                         (uid, class_id, role))
-        return self.activate_class(uid, class_id)
+        member = self.activate_class(uid, class_id)
+        if member['role'] == 'student':
+            self.db.execute('INSERT OR IGNORE INTO student_records(class_id,user_id) VALUES (?,?)',
+                            (class_id, uid))
+        return member
 
     def teacher_default(self, uid, class_id):
         return self.db.execute('SELECT * FROM class_teacher_defaults WHERE user_id=? AND class_id=?',
@@ -423,7 +435,7 @@ class LegacyEngine:
                 f'Код для учителей: {member["teacher_code"]}\n\n'
                 'Передавайте учительский код только учителям.\n'
                 f'Порог нагрузки — {member["daily_limit"]} мин/день. {default_text}',
-                [[button('Предметы класса', 'class_subjects:0')],
+                [[button('Ученики', 'students:0')], [button('Предметы класса', 'class_subjects:0')],
                  [button('Изменить порог', 'limit')],
                  [button('Обновить коды', f'rotate_class:{member["class_id"]}')],
                  [button('Главное меню', 'menu')]])]
@@ -921,7 +933,8 @@ from workflows import WorkflowMixin
 from agent import AgentMixin
 from classroom import ClassroomMixin
 from demo_max import DemoMixin
+from reports import StudentReportsMixin
 
 
-class Engine(DemoMixin, AgentMixin, ClassroomMixin, WorkflowMixin, LegacyEngine):
+class Engine(DemoMixin, AgentMixin, StudentReportsMixin, ClassroomMixin, WorkflowMixin, LegacyEngine):
     """Текущие сценарии поверх совместимого ядра хранения и диалога."""

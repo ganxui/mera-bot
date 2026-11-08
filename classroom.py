@@ -17,11 +17,11 @@ def card(text, rows, title, subtitle, **data):
     return [message]
 
 
-def pages(page, count, payload):
+def pages(page, count, payload, size=PAGE_SIZE):
     row = []
     if page:
         row.append(button('‹ Назад', f'{payload}:{page - 1}'))
-    if (page + 1) * PAGE_SIZE < count:
+    if (page + 1) * size < count:
         row.append(button('Дальше ›', f'{payload}:{page + 1}'))
     return [row] if row else []
 

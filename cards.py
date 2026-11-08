@@ -318,6 +318,13 @@ def render_card(model, directory):
             c.pill((734,552),f'ВЫПОЛНЕНО {model.get("completed",0)} ИЗ {model.get("count",0)}'+(' МИН' if model.get('progress_unit')=='мин' else ''))
         else:
             c.pill((60,535),'МОЖНО ВЫДОХНУТЬ')
+    elif kind=='report':
+        metrics = model.get('metrics', [])
+        for i, (label, value) in enumerate(metrics):
+            c.metric((665, 228 + i * 135), label, value, width=445,
+                     color=TEAL if i == 0 else MUTED)
+        if not metrics:
+            c.orb(898, 350, 109, TEAL, 'document')
     elif kind=='tasks':
         c.text((60,437),model.get('count',0),78,TEAL,800)
         c.text((63,529),'заданий в классе',23,MUTED,600)

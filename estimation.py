@@ -87,6 +87,7 @@ profile — личный кабинет; manage — настройки клас�
 classes — мои классы; switch_class — открыть указанный класс; all_load — нагрузка всех доступных классов;
 create_class — создать класс; join_class — открыть вход по коду;
 class_subjects — показать предметы класса; class_subject — добавить предмет класса (subject);
+students — список учеников; student_tasks — отчёт о выполнении заданий класса;
 profile_subject — изменить предмет учителя (subject, если назван);
 limit — настроить порог нагрузки (minutes, если назван); rotate_codes — запросить смену кодов;
 edit — изменить задание; delete — удалить задание;
