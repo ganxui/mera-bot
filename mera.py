@@ -201,8 +201,9 @@ def build_plan(tasks, done_ids, available, today, days=7, progress=None, spent=N
 
 
 class LegacyEngine:
-    def __init__(self, store, today=moscow_today):
+    def __init__(self, store, today=moscow_today, estimator=None):
         self.store, self.db, self.today = store, store.db, today
+        self.estimator = estimator
 
     def handle(self, uid, text, event_id=None, source_mid=None):
         """Данные, состояние диалога и очередь ответов фиксируются одной транзакцией."""
@@ -420,7 +421,7 @@ class LegacyEngine:
                 return self.publish(uid, state['draft'])
             state['step'] = 'due' if action == 'move' else 'minutes'
             self.store.set_state(uid, state)
-            return self.date_picker(uid) if action == 'move' else self.minute_picker()
+            return self.date_picker(uid) if action == 'move' else self.minute_picker(uid)
         if step == 'create':
             if not 1 <= len(text) <= 40:
                 raise ValueError('Название класса: от 1 до 40 символов.')
@@ -484,7 +485,7 @@ class LegacyEngine:
             if state['step'] == 'due':
                 return self.date_picker(uid)
             if state['step'] == 'minutes':
-                return self.minute_picker()
+                return self.minute_picker(uid)
             return [reply(prompt, [[button('Отмена', 'menu')]])]
         return self.menu(uid, 'Используйте кнопки или /help.\n\n')
 
@@ -599,7 +600,7 @@ class LegacyEngine:
         message['_visual'] = visual
         return [message]
 
-    def minute_picker(self):
+    def minute_picker(self, uid=None):
         return [reply('4 из 4 · Сколько времени займёт задание?\n\nВыберите оценку или напишите своё число минут.',
                       [[button('15 мин', 'minutes:15'), button('30 мин', 'minutes:30')],
                        [button('45 мин', 'minutes:45'), button('60 мин', 'minutes:60')],

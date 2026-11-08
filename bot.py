@@ -237,7 +237,12 @@ def run_polling(store, api):
     if subscriptions:
         raise ValueError('У бота есть Webhook-подписка. Polling одновременно с Webhook не работает. '
                          'Не удаляйте подписку, пока не уточните, кто её использует.')
-    engine = Engine(store)
+    from estimation import DeepSeekEstimator
+
+    estimate_key = os.environ.get('DEEPSEEK_API_KEY', '').strip()
+    estimator = DeepSeekEstimator(estimate_key) if estimate_key else None
+    engine = Engine(store, estimator=estimator)
+    print(f'Автоматическая оценка времени: {"включена" if estimator else "выключена"}.', flush=True)
     print('МЕРА запущена в MAX (демонстрационный Long Polling). Ctrl+C — остановить.', flush=True)
     delay = 2
     while True:

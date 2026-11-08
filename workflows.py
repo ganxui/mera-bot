@@ -2,6 +2,7 @@
 import calendar
 import hashlib
 import json
+import re
 import secrets
 from datetime import date, timedelta
 
@@ -60,6 +61,16 @@ class WorkflowMixin:
     def _handle(self,uid,text):
         state=self.store.state(uid)
         step=state.get('step')
+        if text == 'own_minutes' or text.startswith('estimate:'):
+            self.require(uid, ('admin', 'teacher'))
+            if step != 'minutes':
+                raise ValueError('Карточка устарела. Откройте задание заново.')
+            if text == 'own_minutes':
+                return self.manual_minutes(uid, state)
+            estimate = state.get('time_estimate') or {}
+            if not estimate.get('suggestion') or text != f'estimate:{estimate.get("token")}':
+                raise ValueError('Оценка устарела. Выберите время в текущей карточке.')
+            text = f'minutes:{estimate["suggestion"]["minutes"]}'
         if text in ('/help','help'):
             return [reply('МЕРА распределяет добавленные учителями задания.\n\n'
                 'Новые задания задаются «к уроку»: выберите день урока, подготовка планируется до предыдущего вечера. '
@@ -143,8 +154,11 @@ class WorkflowMixin:
             saved=self.db.execute('SELECT * FROM teacher_defaults WHERE user_id=?',(uid,)).fetchone()
             if not saved:raise ValueError('Сначала опубликуйте первое задание обычным способом.')
             draft={'subject':saved['subject'],'minutes':saved['minutes']}
+            if self.estimator:
+                draft.pop('minutes')
             if text=='repeat_last':draft['body']=saved['body']
-            self.store.set_state(uid,{'step':'due' if text=='repeat_last' else 'body','draft':draft,'deadline_mode':'lesson'})
+            self.store.set_state(uid,{'step':'due' if text=='repeat_last' else 'body','draft':draft,
+                'deadline_mode':'lesson','previous_minutes':saved['minutes']})
             if text=='repeat_last':return self.date_picker(uid)
             return [reply(f'{saved["subject"]} · обычно {saved["minutes"]} мин.\nЧто нужно сделать?',
                 [[button('Назад','back'),button('Отмена','menu')]])]
@@ -158,7 +172,7 @@ class WorkflowMixin:
             self.store.set_state(uid,{'step':field,'draft':draft,'edit_id':task_id,'base_revision':task['revision'],
                 'editing_field':True,'deadline_mode':'lesson' if task.get('lesson_due') else 'evening'})
             if field=='due':return self.date_picker(uid)
-            if field=='minutes':return self.minute_picker()
+            if field=='minutes':return self.minute_picker(uid)
             return [reply('Введите новый предмет:' if field=='subject' else 'Введите новый текст задания:',
                 [[button('Назад',f'edit:{task_id}'),button('Отмена','menu')]])]
         if text.startswith('draft_body:'):
@@ -173,7 +187,7 @@ class WorkflowMixin:
             if not previous:return self.menu(uid)
             state['step']=previous;self.store.set_state(uid,state)
             if previous=='due':return self.date_picker(uid)
-            if previous=='minutes':return self.minute_picker()
+            if previous=='minutes':return self.minute_picker(uid)
             return [reply('Выберите или напишите предмет:' if previous=='subject' else 'Введите текст задания:',
                 [[button('Отмена','menu')]])]
         if text.startswith('suggest:'):
@@ -214,7 +228,12 @@ class WorkflowMixin:
             value=text.split(':',1)[1] if text.startswith(('subject:','minutes:')) else text
             if step=='minutes':value=bounded_int(value,1,600)
             elif not 1<=len(value)<=(60 if step=='subject' else 700):raise ValueError('Проверьте длину введённого текста.')
+            changed = state['draft'].get(step) != value
             state['draft'][step]=value;self.store.set_state(uid,state)
+            if self.estimator and changed and step in ('subject', 'body'):
+                state['step'] = 'minutes'
+                self.store.set_state(uid, state)
+                return self.minute_picker(uid)
             return self.preview(uid,state['draft'])
         if text in ('menu','/menu','plan','/plan'):
             self.store.set_state(uid,{})
@@ -224,12 +243,61 @@ class WorkflowMixin:
             if self.db.execute('SELECT 1 FROM teacher_defaults WHERE user_id=?',(uid,)).fetchone():
                 messages[0]['attachments'][0]['payload']['buttons'].insert(0,[button('Быстрое ДЗ','add_quick')])
         current=self.store.state(uid)
+        if self.estimator and step == 'body' and current.get('step') == 'due':
+            draft = current['draft']
+            if draft.get('body') != state.get('draft', {}).get('body') and 'minutes' in draft:
+                current['previous_minutes'] = draft.pop('minutes')
+                self.store.set_state(uid, current)
         if current.get('step') in ('body','due','minutes'):
             for m in messages:
                 for a in m.get('attachments',[]):
                     if a['type']=='inline_keyboard' and not any(b.get('payload')=='back' for row in a['payload']['buttons'] for b in row):
                         a['payload']['buttons'].append([button('‹ Назад','back')])
         return messages
+
+    def manual_minutes(self, uid, state):
+        messages = super().minute_picker(uid)
+        previous = state['draft'].get('minutes', state.get('previous_minutes'))
+        if previous:
+            rows = messages[0]['attachments'][0]['payload']['buttons']
+            rows.insert(0, [button(f'Оставить {previous} мин', f'minutes:{previous}')])
+        return messages
+
+    def minute_picker(self, uid=None):
+        if not self.estimator or uid is None:
+            return super().minute_picker(uid)
+        member = self.require(uid, ('admin', 'teacher'))
+        state = self.store.state(uid)
+        draft = state['draft']
+        match = re.match(r'^\s*(?:класс\s+)?(1[01]|[1-9])(?!\d)', member['name'], re.IGNORECASE)
+        grade = int(match[1]) if match else None
+        estimate_input = json.dumps([draft['subject'], draft['body'], grade], ensure_ascii=False)
+        fingerprint = hashlib.sha256(estimate_input.encode('utf-8')).hexdigest()
+        cached = state.get('time_estimate') or {}
+        if cached.get('fingerprint') != fingerprint:
+            cached = {
+                'fingerprint': fingerprint,
+                'token': secrets.token_hex(5),
+                'suggestion': self.estimator(draft['subject'], draft['body'], grade),
+            }
+            state['time_estimate'] = cached
+            self.store.set_state(uid, state)
+        suggestion = cached['suggestion']
+        if not suggestion:
+            messages = self.manual_minutes(uid, state)
+            messages[0]['text'] = 'Не удалось оценить время.\n\n' + messages[0]['text']
+            return messages
+        minutes = suggestion['minutes']
+        message = reply(
+            f'Ориентир · {minutes} мин\nВид работы — {suggestion["kind"]}.\n\n'
+            'Подтвердите оценку или напишите своё число минут.',
+            [[button(f'Принять {minutes} мин', f'estimate:{cached["token"]}')],
+             [button('Своё время', 'own_minutes')],
+             [button('‹ Назад', 'back'), button('Отмена', 'menu')]],
+        )
+        message['_visual'] = self.visual(uid, '', message)
+        message['_visual'].update(subtitle=f'Предлагаем {minutes} мин', minutes=minutes)
+        return [message]
 
     def set_actual(self,uid,task_id,actual):
         self.require(uid,('student',));self.task(uid,task_id)
