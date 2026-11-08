@@ -57,7 +57,7 @@ SHORTCUTS = {
     'создай класс': 'create_class', 'добавь класс': 'create_class',
     'мой предмет': 'profile', 'измени мой предмет': 'profile_subject',
     'обнови коды': 'rotate_codes', 'обнови коды класса': 'rotate_codes',
-    'быстрое дз': 'quick', 'повтори последнее задание': 'repeat',
+    'быстрое дз': 'quick', 'быстрый ввод': 'quick', 'повтори последнее задание': 'repeat',
     'добавь задание': 'add', 'добавь дз': 'add',
 }
 LESSON_NAMES = {'понедельнику': 'понедельник', 'вторнику': 'вторник', 'среде': 'среда',
@@ -165,7 +165,7 @@ class AgentMixin:
         member = self.require(uid)
         self.store.set_state(uid, {'step': 'agent'})
         if member['role'] == 'student':
-            example = '«Покажи план на завтра» или «Отметь алгебру готовой».'
+            example = '«Покажи план на завтра» или «Отметь задание по алгебре как выполненное».'
             first = [button('Мой план', 'plan'), button('Моё время', 'free')]
         else:
             example = f'«Покажи задания {member["name"]}» или «Добавь классу предмет Робототехника».'
@@ -267,7 +267,7 @@ class AgentMixin:
                 self.store.set_state(uid, {})
                 payload = f'today_value:{minutes}' if action == 'today_time' else f'free_value:{weekday}:{minutes}'
                 label = 'Сегодня' if action == 'today_time' else WEEKDAYS[weekday]
-                return [reply(f'{label} · {minutes} мин на домашку.', [[button('Сохранить', payload),
+                return [reply(f'{label} · {minutes} мин на домашние задания.', [[button('Сохранить', payload),
                                                                        button('К агенту', ENTRY)]])]
         if action in VIEWS or action == 'plan':
             route = VIEWS.get(action, 'plan')
@@ -366,7 +366,7 @@ class AgentMixin:
                                                         'changes': {key: command[key] for key in
                                                                     ('new_subject', 'body', 'date', 'minutes')
                                                                     if key in command}}})
-        label = {'edit': 'Изменить', 'delete': 'Удалить', 'done': 'Отметить готовым',
+        label = {'edit': 'Изменить', 'delete': 'Удалить', 'done': 'Отметить выполненным',
                  'undo': 'Отменить отметку', 'actual': 'Указать время'}[action]
         rows = [[button(f'{task["subject"]} · {task["body"][:27]}', f'{prefix}:{task["id"]}{suffix}')]
                 for task in matches]

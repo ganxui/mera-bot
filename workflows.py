@@ -6,7 +6,7 @@ import re
 import secrets
 from datetime import date, timedelta
 
-from mera import reply, button, parse_date, pretty_date, bounded_int, WEEKDAYS, MONTH_TITLES
+from mera import DEFAULT_DAILY_LIMIT, reply, button, parse_date, pretty_date, bounded_int, WEEKDAYS, MONTH_TITLES
 
 
 class WorkflowMixin:
@@ -55,7 +55,7 @@ class WorkflowMixin:
         messages=super().menu(uid,prefix)
         if member and self.store.teacher_default(uid, member['class_id']):
             rows=messages[0]['attachments'][0]['payload']['buttons']
-            rows.insert(1,[button('Быстрое ДЗ','add_quick'),button('Повторить','repeat_last')])
+            rows.insert(1,[button('Быстрый ввод','add_quick'),button('Повторить','repeat_last')])
         return messages
 
     def _handle(self,uid,text):
@@ -66,7 +66,7 @@ class WorkflowMixin:
             self.store.set_state(uid, {'step': 'subject', 'draft': {}, 'deadline_mode': 'lesson'})
             messages = self.subject_picker(uid)
             if self.store.teacher_default(uid, member['class_id']):
-                messages[0]['attachments'][0]['payload']['buttons'].insert(0, [button('Быстрое ДЗ', 'add_quick')])
+                messages[0]['attachments'][0]['payload']['buttons'].insert(0, [button('Быстрый ввод', 'add_quick')])
             return messages
         if text == 'own_minutes' or text.startswith('estimate:'):
             self.require(uid, ('admin', 'teacher'))
@@ -82,19 +82,20 @@ class WorkflowMixin:
             return [reply('МЕРА распределяет добавленные учителями задания.\n\n'
                 'Новые задания задаются «к уроку»: выберите день урока, подготовка планируется до предыдущего вечера. '
                 'Старые задания сохраняют выбранный ранее срок «до конца дня».\n\n'
-                '«Часть готова» учитывает указанную часть плана. «Всё готово» завершает задание целиком. '
+                '«Часть выполнена» учитывает часть задания. «Выполнено» отмечает выполнение всего задания. '
                 'Учтённые минуты уменьшают остаток времени на день. Фактическое время можно уточнить; '
                 'ошибочную отметку — отменить в «Выполнено».\n\n'
-                'План учитывает только задания в боте. Порог класса — настройка пилота, а не норматив. '
+                f'План учитывает только добавленные задания. Настройка по умолчанию — {DEFAULT_DAILY_LIMIT} мин/день. '
+                'Классный руководитель может изменить порог. '
                 'Изменения срока согласовывает учитель; бот не переносит его самостоятельно.',[[button('К плану / меню','menu')]])]
         if text=='completed' or text.startswith('completed:'):
             return self.completed(uid,int(text.split(':')[1]) if ':' in text else 0)
         if text=='today_time':
             self.require(uid,('student',))
-            return [reply('Сколько всего времени есть на домашку сегодня?\nУже учтённая работа будет вычтена из этого лимита. '
+            return [reply('Сколько времени вы можете выделить на домашние задания сегодня?\nУже учтённое время будет вычтено из этого лимита. '
                 'Настройка действует только сегодня.',
-                [[button(f'{n} мин' if n else 'Сегодня занят',f'today_value:{n}') for n in pair] for pair in ((0,30),(60,90),(120,180))]+
-                [[button('Как обычно','today_value:default')],[button('Назад к плану','plan')]])]
+                [[button(f'{n} мин',f'today_value:{n}') for n in pair] for pair in ((0,30),(60,90),(120,180))]+
+                [[button('По расписанию','today_value:default')],[button('Назад к плану','plan')]])]
         if text.startswith('today_value:'):
             self.require(uid,('student',))
             value=text.split(':')[1]
@@ -114,11 +115,11 @@ class WorkflowMixin:
                 (uid,task['id'],self.today().isoformat(),remaining,remaining,token))
             self.db.execute('INSERT INTO done(user_id,task_id) VALUES (?,?)',(uid,task['id']))
             self.db.execute('INSERT INTO completion_info VALUES (?,?,?,?)',(uid,task['id'],self.today().isoformat(),log.lastrowid))
-            return [reply(f'Готово: {task["subject"]}.\n\nСегодня учтено ещё {remaining} мин по оценке задания. '
+            return [reply(f'Задание выполнено · {task["subject"]}.\n\nСегодня учтено ещё {remaining} мин по оценке задания. '
                 'Если время отличалось, укажите фактические минуты за всё задание. Ввод добровольный.',
                 [[button(f'{n} мин',f'actual:{task["id"]}:{n}') for n in (15,30,45)],
                  [button('Другое время',f'actual_custom:{task["id"]}'),button('К плану','plan')],
-                 [button('Отменить «готово»',f'undo:{task["id"]}')]])]
+                 [button('Отменить отметку',f'undo:{task["id"]}')]])]
         if text.startswith('part:'):
             self.require(uid,('student',))
             parts=text.split(':')
@@ -134,7 +135,7 @@ class WorkflowMixin:
                 (uid,task['id'],self.today().isoformat(),minutes,minutes,token))
             result=reply(f'{task["subject"]}: учтено {minutes} мин.\nОсталось по оценке: {self.remaining(uid,task)} мин. '
                 'Задание целиком ещё не завершено.',[[button('К плану','plan')],[button('Отменить часть',f'undo_work:{token}')]])
-            result['_visual']={'kind':'done','title':'ЧАСТЬ\nГОТОВА','subtitle':f'Осталось {self.remaining(uid,task)} мин по оценке',
+            result['_visual']={'kind':'done','title':'ЧАСТЬ\nВЫПОЛНЕНА','subtitle':f'Осталось {self.remaining(uid,task)} мин по оценке',
                 'subject':task['subject'],'body':task['body'],'minutes':minutes,'actual':None,
                 'completed':task['minutes']-self.remaining(uid,task),'count':task['minutes'],'progress_unit':'мин'}
             return [result]
@@ -451,13 +452,13 @@ class WorkflowMixin:
             lines.append(f'{task["subject"]}: {task["body"]}\nОценка {task["minutes"]} мин; факт: '+(f'{task["actual"]} мин' if task['actual'] is not None else 'не указан')+'\n')
             rows.append([button('Отменить: '+task['subject'][:24],f'undo:{task["id"]}')])
             entries.append({'subject':task['subject'],'body':task['body'],'minutes':task['actual'] if task['actual'] is not None else task['minutes'],'due':'Факт' if task['actual'] is not None else 'Оценка'})
-        if not tasks:lines.append('Пока нет выполненных заданий. Они появятся здесь после отметки «Всё готово».')
+        if not tasks:lines.append('Пока нет выполненных заданий. Они появятся здесь после отметки «Выполнено».')
         nav=[]
         if page:nav.append(button('‹ Назад',f'completed:{page-1}'))
         if page+1<pages:nav.append(button('Дальше ›',f'completed:{page+1}'))
         if nav:rows.append(nav)
         rows.append([button('К плану','plan')]);message=reply('\n'.join(lines),rows)
-        message['_visual']={'kind':'tasks','title':'УЖЕ\nГОТОВО','subtitle':'Ошибочную отметку можно отменить','entries':entries,'count':len(tasks),'total':sum(t['minutes'] for t in tasks),'page':page+1,'pages':pages}
+        message['_visual']={'kind':'tasks','title':'ВЫПОЛНЕННЫЕ\nЗАДАНИЯ','subtitle':'Ошибочную отметку можно отменить','entries':entries,'count':len(tasks),'total':sum(t['minutes'] for t in tasks),'page':page+1,'pages':pages}
         return [message]
 
     def visual(self,uid,action,message):

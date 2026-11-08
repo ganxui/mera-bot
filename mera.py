@@ -13,6 +13,7 @@ from subjects import subject_key
 
 WEEKDAYS = ('Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс')
 ROLE_LABELS = {'admin': 'классный руководитель', 'teacher': 'учитель', 'student': 'ученик'}
+DEFAULT_DAILY_LIMIT = 180
 
 
 def class_key(value):
@@ -264,7 +265,7 @@ class Store:
 
 
 def build_plan(tasks, done_ids, available, today, days=7, progress=None, spent=None, overrides=None):
-    """Распределение по ближайшему сроку; после дедлайна работа не назначается."""
+    """Распределение по ближайшему сроку. После истечения срока работа не назначается."""
     dates = [today + timedelta(days=i) for i in range(days)]
     plan = {d.isoformat(): [] for d in dates}
     progress,spent,overrides=progress or {},spent or {},overrides or {}
@@ -330,7 +331,7 @@ class LegacyEngine:
     def menu(self, uid, prefix=''):
         member = self.store.member(uid)
         if not member:
-            return [reply(prefix + 'МЕРА · радар учебной нагрузки\n\n'
+            return [reply(prefix + 'МЕРА · планирование учебной нагрузки\n\n'
                 'Учителю — общая нагрузка класса до публикации задания.\n'
                 'Ученику — личный план по доступному времени.\n\n'
                 'Администратор создаёт класс и выдаёт разные коды ученикам и учителям. '
@@ -372,7 +373,7 @@ class LegacyEngine:
                 'Мой план — распределение невыполненных заданий с учётом свободного времени. '
                 'Большое задание может быть разбито на части. Отмечайте его готовым целиком.\n\n'
                 'Порог класса задаёт администратор; это настройка проекта, а не медицинская норма. '
-                'Если времени не хватает, бот сообщает об этом и не переносит дедлайн сам.',
+                'Если времени не хватает, бот сообщает об этом. Срок задания не меняется автоматически.',
                 [[button('Главное меню', 'menu')]])]
         if text == 'menu':
             self.store.set_state(uid, {})
@@ -415,11 +416,13 @@ class LegacyEngine:
             return self.free_time(uid)
         if text == 'manage':
             member = self.require(uid, ('admin',))
+            default_text = ('Это настройка по умолчанию.' if member['daily_limit'] == DEFAULT_DAILY_LIMIT
+                            else f'Настройка по умолчанию — {DEFAULT_DAILY_LIMIT} мин/день.')
             return [reply(f'Управление · {member["name"]}\n\n'
                 f'Код для учеников: {member["student_code"]}\n'
                 f'Код для учителей: {member["teacher_code"]}\n\n'
                 'Передавайте учительский код только учителям.\n'
-                f'Порог нагрузки: {member["daily_limit"]} мин/день. Это настройка пилота.',
+                f'Порог нагрузки — {member["daily_limit"]} мин/день. {default_text}',
                 [[button('Предметы класса', 'class_subjects:0')],
                  [button('Изменить порог', 'limit')],
                  [button('Обновить коды', f'rotate_class:{member["class_id"]}')],
@@ -444,7 +447,7 @@ class LegacyEngine:
             if existing:
                 return [reply('Это задание уже отмечено выполненным.', [[button('Мой план', 'plan')]])]
             self.db.execute('INSERT INTO done(user_id,task_id) VALUES (?,?)', (uid, task['id']))
-            return [reply(f'Готово: {task["subject"]}.\n\nСколько минут ушло на всё задание? '
+            return [reply(f'Задание выполнено · {task["subject"]}.\n\nСколько минут заняло выполнение задания? '
                 'Ответ необязателен; учитель видит только общую медиану от 3 ответов.',
                 [[button(f'{n} мин', f'actual:{task["id"]}:{n}') for n in (15, 30, 45)],
                  [button('Другое время', f'actual_custom:{task["id"]}'), button('Пропустить', 'plan')]])]
@@ -452,7 +455,7 @@ class LegacyEngine:
             self.require(uid, ('student',))
             task = self.task(uid, text.split(':')[1])
             self.store.set_state(uid, {'step': 'actual', 'task_id': task['id']})
-            return [reply('Сколько минут ушло на всё задание? Введите число от 1 до 600.')]
+            return [reply('Сколько минут заняло выполнение задания? Введите число от 1 до 600.')]
         if text.startswith('actual:'):
             self.require(uid, ('student',))
             parts = text.split(':')
@@ -594,7 +597,7 @@ class LegacyEngine:
                for row in self.store.memberships(uid)):
             raise ValueError('У вас уже есть такой класс. Откройте «Мои классы».')
         cursor = self.db.execute('INSERT INTO classes(name,daily_limit,student_code,teacher_code) VALUES (?,?,?,?)',
-            (name, 180, secrets.token_hex(5).upper(), secrets.token_hex(5).upper()))
+            (name, DEFAULT_DAILY_LIMIT, secrets.token_hex(5).upper(), secrets.token_hex(5).upper()))
         self.store.enroll(uid, cursor.lastrowid, 'admin')
         return self._handle(uid, 'manage')
 
@@ -781,7 +784,7 @@ class LegacyEngine:
                 base['role_counts'] = {role: self.db.execute('SELECT COUNT(*) FROM class_memberships WHERE class_id=? AND role=?',
                     (member['class_id'], role)).fetchone()[0] for role in ('admin','teacher','student')}
         elif action.startswith(('done:', 'actual:', 'actual_custom:')) or step == 'actual':
-            base.update(kind='done', title='ЕЩЁ ОДНО\nГОТОВО', subtitle='Шаг за шагом — к свободному вечеру')
+            base.update(kind='done', title='ЗАДАНИЕ\nВЫПОЛНЕНО', subtitle='Фактическое время и общий прогресс')
             task_id = action.split(':')[1] if ':' in action else state.get('task_id')
             if member:
                 task = self.db.execute('''SELECT t.*,d.actual FROM tasks t JOIN done d ON d.task_id=t.id
@@ -825,8 +828,8 @@ class LegacyEngine:
             lines.extend([title, task['body'], self.deadline(task), ''])
             if 0<entry['minutes']<self.remaining(uid,task) and offset>=0:
                 token=self.part_token(uid,task,entry['minutes'])
-                rows.append([button(f'Часть {entry["minutes"]} мин готова',f'part:{task["id"]}:{entry["minutes"]}:{token}')])
-            rows.append([button('Всё готово: ' + task['subject'][:23], 'done:' + task['id'])])
+                rows.append([button(f'Часть выполнена · {entry["minutes"]} мин',f'part:{task["id"]}:{entry["minutes"]}:{token}')])
+            rows.append([button('Выполнено · ' + task['subject'][:23], 'done:' + task['id'])])
         if not entries:
             lines.append('На этот день по добавленным заданиям работы нет.' if tasks else 'Учителя ещё не добавили задания. План пока неполный — проверьте дневник.')
         if not any(plan.values()) and not overdue and not overflow:
@@ -859,7 +862,7 @@ class LegacyEngine:
             (uid,member['class_id'])).fetchone()
         if last_partial:
             rows.append([button('Отменить последнюю часть','undo_work:'+last_partial['token'])])
-        rows.append([button('Сегодня могу…','today_time'),button('Выполнено','completed')])
+        rows.append([button('Время на сегодня','today_time'),button('Выполнено','completed')])
         rows.append([button('Моё время', 'free'), button('Нагрузка','load')])
         lines.append('\nПлан учитывает только задания в боте. Проверьте, всё ли добавлено.')
         message = reply('\n'.join(lines), rows)
@@ -874,7 +877,7 @@ class LegacyEngine:
         if offset < 0:
             message['_visual'].update(title='НУЖНО\nДОДЕЛАТЬ', subtitle='Согласуйте новый срок с учителем')
         elif not tasks:
-            message['_visual'].update(title='ЖДЁМ\nЗАДАНИЯ',subtitle='Учителя ещё не добавили домашку. Проверьте дневник.')
+            message['_visual'].update(title='ЗАДАНИЙ\nПОКА НЕТ',subtitle='Учителя ещё не добавили домашние задания. Проверьте дневник.')
         elif not any(plan.values()) and not overdue and not overflow:
             message['_visual'].update(title='ВСЁ\nОТМЕЧЕНО',subtitle='Выполнены все добавленные в бот задания')
         return [message]

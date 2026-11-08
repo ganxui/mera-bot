@@ -211,7 +211,7 @@ class WorkflowTests(unittest.TestCase):
         message=self.plan()
         self.assertIn('ещё не добавили',message['text'])
         self.assertNotIn('Все добавленные задания выполнены',message['text'])
-        self.assertEqual(message['_visual']['title'],'ЖДЁМ\nЗАДАНИЯ')
+        self.assertEqual(message['_visual']['title'],'ЗАДАНИЙ\nПОКА НЕТ')
 
     def test_today_override_does_not_change_other_days(self):
         self.publish(day=self.day+timedelta(days=2));self.capacity()

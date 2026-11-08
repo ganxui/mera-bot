@@ -32,7 +32,7 @@ def font(size, weight=600):
 
 
 def model_hash(model):
-    return hashlib.sha256(('mera-cards-v4-plan:' + json.dumps(model, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
+    return hashlib.sha256(('mera-cards-v5:' + json.dumps(model, sort_keys=True, ensure_ascii=False)).encode()).hexdigest()
 
 
 def wrap(draw, value, size, width, weight=500, max_lines=3):
@@ -218,7 +218,7 @@ def render_card(model, directory):
     c=Canvas()
     c.logo(80,69,0.75)
     c.text((118,46),'МЕРА',34,WHITE,800)
-    c.text((1138,65),'РАДАР УЧЕБНОЙ НАГРУЗКИ',18,MUTED,700,anchor='rm')
+    c.text((1138,65),'ПЛАНИРОВАНИЕ УЧЕБНОЙ НАГРУЗКИ',18,MUTED,700,anchor='rm')
     c.line((58,112,1142,112),'#1A3B58',1)
     title=model.get('title','ВСЁ\nПО ПЛАНУ')
     lines=title.split('\n')
@@ -315,7 +315,7 @@ def render_card(model, directory):
             c.metric((60,550),'ОЦЕНКА',f'{model["minutes"]} мин')
             actual=model.get('actual')
             c.metric((298,550),'ФАКТИЧЕСКИ',f'{actual} мин' if actual is not None else 'Не указано')
-            c.pill((734,552),f'ГОТОВО {model.get("completed",0)} ИЗ {model.get("count",0)}'+(' МИН' if model.get('progress_unit')=='мин' else ''))
+            c.pill((734,552),f'ВЫПОЛНЕНО {model.get("completed",0)} ИЗ {model.get("count",0)}'+(' МИН' if model.get('progress_unit')=='мин' else ''))
         else:
             c.pill((60,535),'МОЖНО ВЫДОХНУТЬ')
     elif kind=='tasks':
@@ -382,7 +382,7 @@ if __name__=='__main__':
         {'kind':'warning','title':'ВЫСОКАЯ\nНАГРУЗКА','subtitle':'Измените срок или оставьте как есть','total':205,'before':160,'limit':180,'minutes':45,'subject':'История','body':'§ 12, вопросы 1–3. Подготовить краткий пересказ.','due':'6 ноября, Пт'},
         {'kind':'plan','title':'МОЙ\nПЛАН','subtitle':'Освобождаем время для себя','bars':[75,90,60,120,45,30,0],'labels':['Пн','Вт','Ср','Чт','Пт','Сб','Вс'],'selected':0,'total':75,'capacity':120,'count':2,'entries':[{'subject':'Алгебра','minutes':45},{'subject':'История','minutes':30}]},
         {'kind':'manage','title':'УПРАВЛЕНИЕ\nКЛАССОМ','subtitle':'Учителя и ученики — одна команда','class_name':'9А','limit':180,'role_counts':{'admin':1,'teacher':8,'student':25}},
-        {'kind':'done','title':'ЕЩЁ ОДНО\nГОТОВО','subtitle':'Шаг за шагом — к свободному вечеру','subject':'Алгебра','body':'Страница 42, № 8–10','minutes':45,'actual':30,'completed':3,'count':8},
+        {'kind':'done','title':'ЗАДАНИЕ\nВЫПОЛНЕНО','subtitle':'Фактическое время и общий прогресс','subject':'Алгебра','body':'Страница 42, № 8–10','minutes':45,'actual':30,'completed':3,'count':8},
         {'kind':'time','title':'УЧЁБА\nВ СВОЁМ ТЕМПЕ','subtitle':'Настройте время под свой день','bars':[60,90,120,60,45,0,0],'labels':['Пн','Вт','Ср','Чт','Пт','Сб','Вс'],'selected':4,'limit':0,'total':375},
         {'kind':'tasks','title':'ЗАДАНИЯ\nКЛАССА','subtitle':'Оценки времени и обратная связь','class_name':'9А','count':3,'total':105,'page':1,'pages':1,'entries':[{'subject':'Алгебра','body':'Страница 42, № 8–10','minutes':45,'due':'6 ноября, Пт','median':30},{'subject':'История','body':'§ 12, вопросы 1–3','minutes':30,'due':'6 ноября, Пт'},{'subject':'Английский язык','body':'Выучить 20 слов, стр. 56','minutes':30,'due':'7 ноября, Сб'}]}
     ]

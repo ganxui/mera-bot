@@ -109,8 +109,8 @@ class AgentTests(unittest.TestCase):
         self.assertIn('mera_agent', payloads(self.text(3, 'Покажи план на завтра')))
         self.parser.return_value = {'action': 'done', 'subject': 'Алгебра'}
         done = self.text(3, '/agent отметь алгебру готовой')
-        self.assertIn('Отметить готовым', str(done[0]['attachments']))
-        self.assertIn('Готово: Алгебра', self.click(3, done, 'done:')[0]['text'])
+        self.assertIn('Отметить выполненным', str(done[0]['attachments']))
+        self.assertIn('Задание выполнено · Алгебра', self.click(3, done, 'done:')[0]['text'])
         self.assertIn('Алгебра', self.text(3, 'Выполненные')[0]['text'])
 
     def test_plan_settings_and_no_model_payload_execution(self):
