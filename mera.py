@@ -342,7 +342,7 @@ class LegacyEngine:
         if member['role'] == 'admin':
             rows.append([button('Управление классом', 'manage')])
         return [reply(prefix + f'МЕРА · {member["name"]}\nВы — {role}.\n\n'
-                      'Выберите действие. /menu — вернуться сюда, /cancel — отменить ввод.', rows)]
+                      '/menu — вернуться сюда, /cancel — отменить ввод.\n\nВыберите действие:', rows)]
 
     def require(self, uid, roles=None):
         member = self.store.member(uid)
