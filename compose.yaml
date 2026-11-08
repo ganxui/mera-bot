@@ -1,0 +1,9 @@
+services:
+  mera:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - mera-data:/app/data
+volumes:
+  mera-data:
