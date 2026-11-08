@@ -224,6 +224,11 @@ class Store:
         return self.db.execute('SELECT * FROM class_teacher_defaults WHERE user_id=? AND class_id=?',
                                (uid, class_id)).fetchone()
 
+    def invitation(self, code):
+        code = code.upper()
+        return self.db.execute('''SELECT id,name,CASE WHEN teacher_code=? THEN 'teacher' ELSE 'student' END AS role
+            FROM classes WHERE student_code=? OR teacher_code=?''', (code, code, code)).fetchone()
+
     def ensure_class_subject(self, class_id, name):
         key = subject_key(name)
         self.db.execute('''INSERT INTO class_subjects(class_id,name,name_key) VALUES (?,?,?)
@@ -515,13 +520,12 @@ class LegacyEngine:
         if step == 'create':
             return self.create_class(uid, text)
         if step == 'join':
-            code = text.upper()
-            row = self.db.execute('SELECT * FROM classes WHERE student_code=? OR teacher_code=?', (code, code)).fetchone()
+            row = self.store.invitation(text)
             if not row:
                 if state.get('expected_role'):
                     return self.invite_prompt(state, 'Код не найден. Проверьте его и попробуйте ещё раз.')
                 raise ValueError('Код не найден. Проверьте его у администратора и попробуйте снова.')
-            role = 'teacher' if code == row['teacher_code'] else 'student'
+            role = row['role']
             if state.get('expected_role') and role != state['expected_role']:
                 return self.invite_prompt(state, 'Этот код для другой роли. Запросите подходящий код у классного руководителя.')
             member = self.store.enroll(uid, row['id'], role)

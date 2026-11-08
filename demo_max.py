@@ -13,6 +13,7 @@ class DemoSession:
     active: bool = True
     generation: str = field(default_factory=lambda: secrets.token_hex(5))
     reset_token: str = ''
+    live_invite: dict = field(default_factory=dict)
 
 
 class DemoMixin:
@@ -44,6 +45,7 @@ class DemoMixin:
             session = self.demos.get(uid) or self.new_demo(uid)
             session.active = True
             session.reset_token = ''
+            session.live_invite.clear()
             self.demos.move_to_end(uid)
             return self.demo_screen(session, '/menu', False)
         session = self.demos.get(uid)
@@ -52,6 +54,9 @@ class DemoMixin:
                 return self.demo_link(self.menu(uid, 'Откройте демо через /demo.\n\n'))
             return super().route_input(uid, text, is_callback)
         self.demos.move_to_end(uid)
+        if is_callback is True and text.startswith('demo:live_join:'):
+            return self.join_from_demo(uid, session, text)
+        session.live_invite.clear()
         if text == '/demo_exit' or text == 'demo:exit' and is_callback is True:
             session.active = False
             session.reset_token = ''
@@ -84,7 +89,38 @@ class DemoMixin:
             if not text.startswith(prefix):
                 return self.demo_screen(session, '/menu', False, 'Откройте актуальную карточку.\n\n')
             text = text[len(prefix):]
+        elif not text.startswith('/'):
+            demo_store = session.engine.store
+            state = demo_store.state(session.actor)
+            if state.get('step') == 'join' and not demo_store.invitation(text):
+                invite = self.store.invitation(text)
+                if invite:
+                    token = secrets.token_hex(5)
+                    session.live_invite = {'token': token, 'code': text, 'class_id': invite['id'],
+                                           'role': invite['role'], 'subject': state.get('teacher_subject')}
+                    role = 'учителя' if invite['role'] == 'teacher' else 'ученика'
+                    return self.demo_card(session,
+                        f'Это рабочий код для {role} класса {invite["name"]}.\n'
+                        'Чтобы использовать его, перейдите в рабочий режим.',
+                        [[button('Выйти и войти в класс', f'demo:live_join:{token}')],
+                         [button('Остаться в демо', 'demo:enter')]], 'РАБОЧИЙ\nКОД')
         return self.demo_screen(session, text, is_callback)
+
+    def join_from_demo(self, uid, session, text):
+        pending = session.live_invite
+        if not pending or text != f'demo:live_join:{pending["token"]}':
+            return self.demo_screen(session, '/menu', False, 'Подтверждение устарело.\n\n')
+        session.live_invite = {}
+        invite = self.store.invitation(pending['code'])
+        if not invite or invite['id'] != pending['class_id'] or invite['role'] != pending['role']:
+            return self.demo_screen(session, '/menu', False, 'Код изменился. Запросите новое приглашение.\n\n')
+        session.active = False
+        if invite['role'] == 'teacher' and not pending['subject']:
+            self.store.set_state(uid, {'step': 'teacher_subject', 'invite_code': pending['code']})
+            return self.subject_picker(uid)
+        self.store.set_state(uid, {'step': 'join', 'expected_role': invite['role'],
+                                   'teacher_subject': pending['subject']})
+        return super().route_input(uid, pending['code'], False)
 
     def new_demo(self, uid):
         previous = self.demos.pop(uid, None)
@@ -100,8 +136,11 @@ class DemoMixin:
 
     def demo_screen(self, session, text, is_callback, prefix=''):
         messages = session.engine.handle(session.actor, text, is_callback=is_callback)
+        awaiting_invite = session.engine.store.state(session.actor).get('step') == 'join'
         for message in messages:
             message['text'] = f'Демо · аккаунт {session.actor}\n\n' + prefix + message['text']
+            if awaiting_invite:
+                message['text'] += '\n\nДля тестового входа используйте код класса из этой демо-сессии.'
             attachments = message.setdefault('attachments', [])
             keyboard = next((item for item in attachments if item['type'] == 'inline_keyboard'), None)
             if keyboard is None:

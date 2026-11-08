@@ -156,9 +156,12 @@ class ClassroomMixin:
         if not name:
             return self.subject_picker(uid, error='Введите название предмета от 1 до 60 символов.')
         if state.get('step') == 'teacher_subject':
-            state = {'step': 'join', 'expected_role': 'teacher', 'teacher_subject': name}
-            self.store.set_state(uid, state)
-            return self.invite_prompt(state)
+            invite_code = state.get('invite_code')
+            join = {'step': 'join', 'expected_role': 'teacher', 'teacher_subject': name}
+            self.store.set_state(uid, join)
+            if invite_code:
+                return super()._handle(uid, invite_code)
+            return self.invite_prompt(join)
         if state.get('step') == 'profile_subject':
             member = self.require(uid, ('teacher',))
             self.store.set_teacher_subject(uid, member['class_id'], name)
