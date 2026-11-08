@@ -201,18 +201,19 @@ def build_plan(tasks, done_ids, available, today, days=7, progress=None, spent=N
 
 
 class LegacyEngine:
-    def __init__(self, store, today=moscow_today, estimator=None):
+    def __init__(self, store, today=moscow_today, estimator=None, command_parser=None):
         self.store, self.db, self.today = store, store.db, today
         self.estimator = estimator
+        self.command_parser = command_parser
 
-    def handle(self, uid, text, event_id=None, source_mid=None):
+    def handle(self, uid, text, event_id=None, source_mid=None, is_callback=None):
         """Данные, состояние диалога и очередь ответов фиксируются одной транзакцией."""
         uid = int(uid)
         with self.db:
             if event_id and self.db.execute('SELECT 1 FROM processed WHERE event_id=?', (event_id,)).fetchone():
                 return []
             try:
-                messages = self._handle(uid, str(text).strip())
+                messages = self.route_input(uid, str(text).strip(), is_callback)
             except ValueError as exc:
                 messages = [reply(str(exc), [[button('Отмена', 'menu')]])]
             for message in messages:
@@ -225,6 +226,9 @@ class LegacyEngine:
                                     (uid, json.dumps(message, ensure_ascii=False)))
                 self.db.execute('INSERT INTO processed VALUES (?)', (event_id,))
             return messages
+
+    def route_input(self, uid, text, is_callback):
+        return self._handle(uid, text)
 
     def menu(self, uid, prefix=''):
         member = self.store.member(uid)
@@ -804,7 +808,8 @@ class LegacyEngine:
 
 
 from workflows import WorkflowMixin
+from agent import AgentMixin
 
 
-class Engine(WorkflowMixin,LegacyEngine):
+class Engine(AgentMixin, WorkflowMixin, LegacyEngine):
     """Текущие сценарии поверх совместимого ядра хранения и диалога."""

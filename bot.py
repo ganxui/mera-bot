@@ -237,12 +237,14 @@ def run_polling(store, api):
     if subscriptions:
         raise ValueError('У бота есть Webhook-подписка. Polling одновременно с Webhook не работает. '
                          'Не удаляйте подписку, пока не уточните, кто её использует.')
-    from estimation import DeepSeekEstimator
+    from estimation import DeepSeekCommandParser, DeepSeekEstimator
 
     estimate_key = os.environ.get('DEEPSEEK_API_KEY', '').strip()
     estimator = DeepSeekEstimator(estimate_key) if estimate_key else None
-    engine = Engine(store, estimator=estimator)
+    command_parser = DeepSeekCommandParser(estimate_key) if estimate_key else None
+    engine = Engine(store, estimator=estimator, command_parser=command_parser)
     print(f'Автоматическая оценка времени: {"включена" if estimator else "выключена"}.', flush=True)
+    print(f'Mera Agent: {"расширенный" if command_parser else "базовый"} режим.', flush=True)
     print('МЕРА запущена в MAX (демонстрационный Long Polling). Ctrl+C — остановить.', flush=True)
     delay = 2
     while True:
@@ -258,7 +260,8 @@ def run_polling(store, api):
                 if not decoded:
                     continue
                 source_mid = ((update.get('message') or {}).get('body') or {}).get('mid') if update.get('update_type') == 'message_callback' else None
-                engine.handle(*decoded, event_id=event_key(update), source_mid=source_mid)
+                engine.handle(*decoded, event_id=event_key(update), source_mid=source_mid,
+                              is_callback=update.get('update_type') == 'message_callback')
                 callback_id = (update.get('callback') or {}).get('callback_id')
                 if callback_id:
                     try:
@@ -319,9 +322,10 @@ def run_demo():
                     continue
                 show(engine.handle(uid, '/menu'))
                 continue
-            if text.startswith('/') and text[1:].isdigit() and 1 <= int(text[1:]) <= len(buttons):
+            is_callback = text.startswith('/') and text[1:].isdigit() and 1 <= int(text[1:]) <= len(buttons)
+            if is_callback:
                 text = buttons[int(text[1:]) - 1]['payload']
-            show(engine.handle(uid, text))
+            show(engine.handle(uid, text, is_callback=is_callback))
     except (KeyboardInterrupt, EOFError):
         pass
     finally:

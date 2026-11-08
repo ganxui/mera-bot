@@ -325,6 +325,10 @@ class WorkflowMixin:
         text=f'{title} · {member["name"]}\n\n{draft["subject"]}: {draft["body"]}\n{self.deadline(draft)}\n'
         text+=f'Подготовить до конца {pretty_date(draft["due"])}. Оценка: {draft["minutes"]} мин.\n\n'
         text+=f'На вечер подготовки: {total} мин с этим заданием. Порог класса: {member["daily_limit"]} мин.'
+        if state.get('agent_draft'):
+            text = (f'{title} · {member["name"]}\n\n{draft["subject"]} · {draft["minutes"]} мин\n'
+                    f'{draft["body"]}\n{self.deadline(draft)}\n'
+                    f'На {pretty_date(draft["due"])} — {total} из {member["daily_limit"]} мин.')
         if state.get('edit_id'):
             finished=self.db.execute('SELECT COUNT(*) FROM done WHERE task_id=?',(state['edit_id'],)).fetchone()[0]
             if finished:text+=f'\n\nУже выполнено у {finished} учеников. Их отметки сохранятся; дополнительную работу задайте новым заданием.'
@@ -366,6 +370,14 @@ class WorkflowMixin:
             (task_id,draft.get('lesson_due'),revision,self.today().isoformat()))
         self.db.execute('INSERT OR REPLACE INTO teacher_defaults VALUES (?,?,?,?)',(uid,draft['subject'],draft['body'],draft['minutes']))
         self.store.set_state(uid,{})
+        if state.get('agent_draft'):
+            title = 'Изменения сохранены' if state.get('edit_id') else 'Задание опубликовано'
+            message = reply(f'{title} · {member["name"]}\n{draft["subject"]} · {draft["minutes"]} мин · {self.deadline(draft)}',
+                            [[button('Mera Agent', 'mera_agent'), button('К заданиям', 'tasks')]])
+            message['_visual'] = {'kind': 'tasks', 'title': 'ЗАДАНИЕ\nСОХРАНЕНО',
+                                  'subtitle': title, 'class_name': member['name'], 'count': 1,
+                                  'total': draft['minutes'], 'entries': [{**draft, 'due': self.deadline(draft)}]}
+            return [message]
         return self.menu(uid,'Изменения сохранены.\n\n' if state.get('edit_id') else 'Задание опубликовано.\n\n')
 
     def date_picker(self,uid,month=None,error=''):
