@@ -343,13 +343,13 @@ def render_card(model, directory):
         if not model.get('entries'):
             c.orb(898,350,109,TEAL,'document')
     elif kind=='help':
-        for i,icon in enumerate(('document','clock','check')):
+        steps = model.get('help_steps', [('document','Задание'), ('clock','Время'), ('check','План')])
+        for i,(icon,label) in enumerate(steps):
             x,y=711+i*174,325
-            if i<2:
+            if i<len(steps)-1:
                 c.line((x+65,y,x+110,y),'#37657D',4)
             c.orb(x,y,60,TEAL if i!=1 else BLUE,icon)
-        for i,label in enumerate(('Задание','Время','План')):
-            c.text((711+i*174,430),label,24,MUTED,700,anchor='mm')
+            c.text((x,430),label,24,MUTED,700,anchor='mm')
     elif kind=='time':
         if 'bars' in model:
             c.chart(model,model.get('selected'))

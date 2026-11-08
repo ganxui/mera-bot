@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from html import unescape
 
 from mera import Engine, Store, button, reply
 from cards import model_hash, render_card
@@ -303,7 +304,10 @@ def run_demo():
         nonlocal buttons
         buttons = []
         for message in messages:
-            print('\n' + message['text'])
+            text = message['text']
+            if message.get('format') == 'html':
+                text = unescape(text.replace('<b>', '').replace('</b>', ''))
+            print('\n' + text)
             for attachment in message.get('attachments', []):
                 for row in attachment['payload']['buttons']:
                     for b in row:

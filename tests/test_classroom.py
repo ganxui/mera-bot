@@ -35,7 +35,7 @@ class ClassroomTests(unittest.TestCase):
         return self.store.member(uid)
 
     def test_role_menu_head_teacher_student_and_distinct_invites(self):
-        self.assertEqual(controls(self.enter(1, '/start')), {'enroll:head', 'enroll:teacher', 'enroll:student'})
+        self.assertEqual(controls(self.enter(1, '/start')), {'enroll:head', 'enroll:teacher', 'enroll:student', 'guide'})
         head = self.create_class()
         self.assertEqual(head['name'], '9А')
         self.assertNotEqual(head['teacher_code'], head['student_code'])

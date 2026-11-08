@@ -39,7 +39,7 @@ VIEWS = {
     'load': 'load', 'tasks': 'tasks', 'completed': 'completed', 'availability': 'free',
     'today_time': 'today_time', 'manage': 'manage', 'quick': 'add_quick',
     'repeat': 'repeat_last', 'part': 'plan',
-    'students': 'students:0', 'student_tasks': 'student_tasks:0',
+    'students': 'students:0', 'student_tasks': 'student_tasks:0', 'instructions': 'guide',
 }
 TASK_ACTIONS = ('edit', 'delete', 'done', 'undo', 'actual')
 SHORTCUTS = {
@@ -50,6 +50,7 @@ SHORTCUTS = {
     'время на сегодня': 'today_time', 'личный кабинет': 'profile', 'профиль': 'profile',
     'управление классом': 'manage', 'настройки класса': 'manage', 'коды класса': 'manage',
     'коды': 'manage', 'кабинет': 'profile',
+    'инструкции': 'instructions', 'инструкцию': 'instructions', 'помощь': 'instructions',
     'ученики': 'students', 'учеников': 'students', 'список учеников': 'students',
     'отчёт по заданиям': 'student_tasks', 'отчет по заданиям': 'student_tasks',
     'предметы класса': 'class_subjects', 'список предметов': 'class_subjects',
@@ -176,7 +177,8 @@ class AgentMixin:
         message = reply(f'{error}Mera Agent · {member["name"]}\n\n{example}\n'
                         'Пишите команды без имён, контактов и кодов доступа.',
                         [first, [button('Нагрузка', 'load'), button('Мои классы', 'classes:0')],
-                         [button('Личный кабинет', 'profile')], [button('Меню', 'menu')]])
+                         [button('Личный кабинет', 'profile')], [button('Инструкции', 'guide')],
+                         [button('Меню', 'menu')]])
         message['_visual'] = {'kind': 'help', 'title': 'MERA\nAGENT', 'subtitle': 'Напишите, что нужно сделать',
                               'class_name': member['name'], 'role': ROLE_LABELS[member['role']].capitalize()}
         return [message]

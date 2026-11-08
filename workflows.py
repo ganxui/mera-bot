@@ -6,7 +6,7 @@ import re
 import secrets
 from datetime import date, timedelta
 
-from mera import DEFAULT_DAILY_LIMIT, reply, button, parse_date, pretty_date, bounded_int, WEEKDAYS, MONTH_TITLES
+from mera import reply, button, parse_date, pretty_date, bounded_int, WEEKDAYS, MONTH_TITLES
 
 
 class WorkflowMixin:
@@ -78,16 +78,6 @@ class WorkflowMixin:
             if not estimate.get('suggestion') or text != f'estimate:{estimate.get("token")}':
                 raise ValueError('Оценка устарела. Выберите время в текущей карточке.')
             text = f'minutes:{estimate["suggestion"]["minutes"]}'
-        if text in ('/help','help'):
-            return [reply('МЕРА распределяет добавленные учителями задания.\n\n'
-                'Новые задания задаются «к уроку»: выберите день урока, подготовка планируется до предыдущего вечера. '
-                'Старые задания сохраняют выбранный ранее срок «до конца дня».\n\n'
-                '«Часть выполнена» учитывает часть задания. «Выполнено» отмечает выполнение всего задания. '
-                'Учтённые минуты уменьшают остаток времени на день. Фактическое время можно уточнить; '
-                'ошибочную отметку — отменить в «Выполнено».\n\n'
-                f'План учитывает только добавленные задания. Настройка по умолчанию — {DEFAULT_DAILY_LIMIT} мин/день. '
-                'Классный руководитель может изменить порог. '
-                'Изменения срока согласовывает учитель; бот не переносит его самостоятельно.',[[button('К плану / меню','menu')]])]
         if text=='completed' or text.startswith('completed:'):
             return self.completed(uid,int(text.split(':')[1]) if ':' in text else 0)
         if text=='today_time':

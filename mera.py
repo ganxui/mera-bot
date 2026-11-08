@@ -934,7 +934,9 @@ from agent import AgentMixin
 from classroom import ClassroomMixin
 from demo_max import DemoMixin
 from reports import StudentReportsMixin
+from instructions import InstructionMixin
 
 
-class Engine(DemoMixin, AgentMixin, StudentReportsMixin, ClassroomMixin, WorkflowMixin, LegacyEngine):
+class Engine(DemoMixin, AgentMixin, StudentReportsMixin, InstructionMixin,
+             ClassroomMixin, WorkflowMixin, LegacyEngine):
     """Текущие сценарии поверх совместимого ядра хранения и диалога."""
