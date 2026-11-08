@@ -9,8 +9,8 @@ def main():
     store = Store(':memory:')
     engine = Engine(store)
 
-    def act(uid, command, show=True):
-        messages = engine.handle(uid, command)
+    def act(uid, command, show=True, is_callback=False):
+        messages = engine.handle(uid, command, is_callback=is_callback)
         if show:
             print('\n' + '\n\n'.join(m['text'] for m in messages))
         return messages
@@ -20,19 +20,23 @@ def main():
             act(2, command, False)
         messages = act(2, str(minutes))
         action = messages[0]['attachments'][0]['payload']['buttons'][0][0]['payload']
-        act(2, action, False)
+        act(2, action, False, is_callback=True)
 
     print('МЕРА · ДЕМОНСТРАЦИЯ. Все данные вымышленные, сеть не используется.')
-    print('\n1. Администратор создаёт класс 9А.')
-    act(1, 'create', False)
-    act(1, '9А', False)
+    print('\n1. Классный руководитель выбирает 9А и получает два кода.')
+    act(1, 'enroll:head', False, is_callback=True)
+    act(1, 'class_grade:9', False, is_callback=True)
+    act(1, 'class_pick:9:А', False, is_callback=True)
     member = store.member(1)
     print('Создан класс с отдельными кодами учителя и ученика.')
-    for uid, code in ((2, member['teacher_code']), (3, member['student_code'])):
-        act(uid, 'join', False)
-        act(uid, code, False)
+    act(2, 'enroll:teacher', False, is_callback=True)
+    act(2, 'Робототехника', False)
+    act(2, member['teacher_code'])
+    act(1, 'class_subjects:0', is_callback=True)
+    act(3, 'enroll:student', False, is_callback=True)
+    act(3, member['student_code'], False)
     print('\n2. Учитель публикует задания. При превышении 180 минут видит предупреждение.')
-    for subject, minutes in (('Алгебра', 60), ('Русский язык', 60), ('Физика', 45), ('История', 45)):
+    for subject, minutes in (('Робототехника', 60), ('Русский язык', 60), ('Физика', 45), ('История', 45)):
         publish(subject, minutes)
     act(2, 'load')
     print('\n3. Ученик задаёт доступное время, видит план и нехватку времени до урока.')

@@ -61,6 +61,13 @@ class WorkflowMixin:
     def _handle(self,uid,text):
         state=self.store.state(uid)
         step=state.get('step')
+        if text in ('add', '/add'):
+            self.require(uid, ('admin', 'teacher'))
+            self.store.set_state(uid, {'step': 'subject', 'draft': {}, 'deadline_mode': 'lesson'})
+            messages = self.subject_picker(uid)
+            if self.db.execute('SELECT 1 FROM teacher_defaults WHERE user_id=?', (uid,)).fetchone():
+                messages[0]['attachments'][0]['payload']['buttons'].insert(0, [button('Быстрое ДЗ', 'add_quick')])
+            return messages
         if text == 'own_minutes' or text.startswith('estimate:'):
             self.require(uid, ('admin', 'teacher'))
             if step != 'minutes':
@@ -173,6 +180,7 @@ class WorkflowMixin:
                 'editing_field':True,'deadline_mode':'lesson' if task.get('lesson_due') else 'evening'})
             if field=='due':return self.date_picker(uid)
             if field=='minutes':return self.minute_picker(uid)
+            if field=='subject':return self.subject_picker(uid)
             return [reply('Введите новый предмет:' if field=='subject' else 'Введите новый текст задания:',
                 [[button('Назад',f'edit:{task_id}'),button('Отмена','menu')]])]
         if text.startswith('draft_body:'):
@@ -188,7 +196,8 @@ class WorkflowMixin:
             state['step']=previous;self.store.set_state(uid,state)
             if previous=='due':return self.date_picker(uid)
             if previous=='minutes':return self.minute_picker(uid)
-            return [reply('Выберите или напишите предмет:' if previous=='subject' else 'Введите текст задания:',
+            if previous=='subject':return self.subject_picker(uid)
+            return [reply('Введите текст задания:',
                 [[button('Отмена','menu')]])]
         if text.startswith('suggest:'):
             _,nonce,day=text.split(':')
@@ -238,10 +247,6 @@ class WorkflowMixin:
         if text in ('menu','/menu','plan','/plan'):
             self.store.set_state(uid,{})
         messages=super()._handle(uid,text)
-        if text=='add':
-            current=self.store.state(uid);current['deadline_mode']='lesson';self.store.set_state(uid,current)
-            if self.db.execute('SELECT 1 FROM teacher_defaults WHERE user_id=?',(uid,)).fetchone():
-                messages[0]['attachments'][0]['payload']['buttons'].insert(0,[button('Быстрое ДЗ','add_quick')])
         current=self.store.state(uid)
         if self.estimator and step == 'body' and current.get('step') == 'due':
             draft = current['draft']
@@ -369,6 +374,7 @@ class WorkflowMixin:
         self.db.execute('INSERT OR REPLACE INTO task_details VALUES (?,?,?,?)',
             (task_id,draft.get('lesson_due'),revision,self.today().isoformat()))
         self.db.execute('INSERT OR REPLACE INTO teacher_defaults VALUES (?,?,?,?)',(uid,draft['subject'],draft['body'],draft['minutes']))
+        self.store.ensure_class_subject(member['class_id'], draft['subject'])
         self.store.set_state(uid,{})
         if state.get('agent_draft'):
             title = 'Изменения сохранены' if state.get('edit_id') else 'Задание опубликовано'

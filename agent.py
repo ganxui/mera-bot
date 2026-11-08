@@ -3,7 +3,7 @@ import re
 import secrets
 from datetime import timedelta
 
-from mera import WEEKDAYS, button, parse_date, reply
+from mera import ROLE_LABELS, WEEKDAYS, button, parse_date, reply
 
 
 ENTRY = 'mera_agent'
@@ -17,6 +17,9 @@ ADD_TARGET = re.compile(
     rf'^(?:добавь(?:те)?|задай(?:те)?|создай(?:те)?)\s+'
     rf'(?:в\s+)?(?:класс\s+)?({CLASS_LABEL})\s+(?:дз|(?:домашнее )?задание)\b',
     re.IGNORECASE)
+ADD_SUBJECT = re.compile(rf'^(?:добавь|создай)\s+(?:новый\s+)?предмет\s+(.+?)'
+                         rf'(?:\s+(?:в|для)\s+(?:класс[ае]?\s+)?({CLASS_LABEL}))?$',
+                         re.IGNORECASE)
 MINUTES = re.compile(
     r'\s+на\s+(\d{1,3})\s*(?:(мин(?:ут[ауы]?)?)|ч(?:ас(?:а|ов)?)?'
     r'(?:\s+(\d{1,2})\s*мин(?:ут[ауы]?)?)?)(?:\.|\s|$)', re.IGNORECASE)
@@ -45,7 +48,6 @@ SHORTCUTS = {
     'быстрое дз': 'quick', 'повтори последнее задание': 'repeat',
     'добавь задание': 'add', 'добавь дз': 'add',
 }
-ROLE = {'admin': 'администратор', 'teacher': 'учитель', 'student': 'ученик'}
 LESSON_NAMES = {'понедельнику': 'понедельник', 'вторнику': 'вторник', 'среде': 'среда',
                 'четвергу': 'четверг', 'пятнице': 'пятница', 'субботе': 'суббота',
                 'воскресенью': 'воскресенье'}
@@ -76,6 +78,9 @@ def local_command(text):
     match = re.fullmatch(r'(?:мой )?план на (сегодня|завтра|послезавтра)', plain)
     if match:
         return {'action': 'plan', 'date': match[1]}
+    match = ADD_SUBJECT.fullmatch(text)
+    if match:
+        return {'action': 'class_subject', 'subject': match[1].strip(' «»"'), 'class_name': match[2]}
     header, separator, body = text.partition(':')
     match = ADD_HEADER.fullmatch(header.strip()) if separator and body.strip() else None
     if not match:
@@ -123,8 +128,8 @@ class AgentMixin:
         if state.get('agent_draft') and state.get('step') in ('subject', 'body') and not state.get('editing_field'):
             if state['step'] == 'subject' and text.startswith('subject:'):
                 return self.agent_fill(uid, state, text.split(':', 1)[1])
-            if is_callback is not True and text and not text.startswith('/') and text not in (
-                    'back', 'menu', 'add', 'load', 'plan', 'tasks', 'manage', 'help'):
+            if is_callback is not True and text and not text.startswith(('/', 'catalog:')) and text not in (
+                    'back', 'menu', 'add', 'load', 'plan', 'tasks', 'manage', 'help', 'profile'):
                 return self.agent_fill(uid, state, text)
         if is_callback is not True:
             if state.get('step') == 'agent' and not text.startswith('/'):
@@ -148,7 +153,7 @@ class AgentMixin:
                         'Пишите команды без имён, контактов и кодов доступа.',
                         [first, [button('Нагрузка', 'load'), button('Меню', 'menu')]])
         message['_visual'] = {'kind': 'help', 'title': 'MERA\nAGENT', 'subtitle': 'Напишите, что нужно сделать',
-                              'class_name': member['name'], 'role': ROLE[member['role']].capitalize()}
+                              'class_name': member['name'], 'role': ROLE_LABELS[member['role']].capitalize()}
         return [message]
 
     def agent_command(self, uid, text, command=None):
@@ -160,7 +165,8 @@ class AgentMixin:
         explicit_target = ADD_TARGET.match(text)
         if explicit_target and class_key(explicit_target[1]) != class_key(member['name']):
             return self.agent_prompt(uid, f'В этом аккаунте доступен класс {member["name"]}.\n\n')
-        command = command or local_command(text)
+        local = command or local_command(text)
+        command = local
         if command is None and self.command_parser and text:
             command = self.command_parser(text)
         if not isinstance(command, dict):
@@ -169,10 +175,12 @@ class AgentMixin:
         target = text_field(command, 'class_name', 40)
         if target and class_key(target) != class_key(member['name']):
             return self.agent_prompt(uid, f'В этом аккаунте доступен класс {member["name"]}.\n\n')
+        if local and action == 'class_subject':
+            return self.add_class_subject(uid, text_field(command, 'subject', 60))
         if action == 'add':
             self.require(uid, ('teacher', 'admin'))
             draft = {key: value for key, value in (
-                ('subject', text_field(command, 'subject', 60)),
+                ('subject', text_field(command, 'subject', 60) or member['subject']),
                 ('body', text_field(command, 'body', 700)),
                 ('minutes', time_field(command)),
             ) if value}
@@ -183,18 +191,9 @@ class AgentMixin:
         if action in TASK_ACTIONS:
             return self.agent_task(uid, member, action, command)
         if action == 'profile':
+            messages = self.profile(uid)
             self.store.set_state(uid, {'step': 'agent'})
-            rows = ([[button('Мой план', 'plan'), button('Моё время', 'free')],
-                     [button('Выполнено', 'completed')]] if member['role'] == 'student' else
-                    [[button('Задания и статистика', 'tasks'), button('Нагрузка класса', 'load')]])
-            if member['role'] == 'admin':
-                rows.append([button('Управление классом', 'manage')])
-            rows.append([button('Mera Agent', ENTRY)])
-            message = reply(f'Личный кабинет · {member["name"]}\nРоль — {ROLE[member["role"]]}.', rows)
-            message['_visual'] = {'kind': 'menu', 'title': 'ЛИЧНЫЙ\nКАБИНЕТ',
-                                  'subtitle': 'Ваши действия и настройки', 'class_name': member['name'],
-                                  'role': ROLE[member['role']].capitalize()}
-            return [message]
+            return messages
         if action in ('availability', 'today_time'):
             self.require(uid, ('student',))
             minutes = time_field(command, minimum=0)
@@ -258,8 +257,9 @@ class AgentMixin:
             return self.minute_picker(uid)
         if step == 'confirm':
             return self.preview(uid, draft)
-        prompt = 'По какому предмету задание?' if step == 'subject' else 'Что нужно сделать?'
-        return [reply(prompt, [[button('Отмена', 'menu')]])]
+        if step == 'subject':
+            return self.subject_picker(uid)
+        return [reply('Что нужно сделать?', [[button('Отмена', 'menu')]])]
 
     def agent_task(self, uid, member, action, command):
         teacher_action = action in ('edit', 'delete')

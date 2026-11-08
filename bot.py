@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from mera import Engine, Store
+from mera import Engine, Store, button, reply
 from cards import model_hash, render_card
 
 
@@ -293,11 +293,12 @@ def run_demo():
     engine = Engine(store)
     uid = 1
     buttons = []
+    reset_pending = False
     print('МЕРА · локальное демо без MAX и токена\n'
-          '/user 1 — администратор, /user 2 — учитель, /user 3 — ученик.\n'
-          'Введите /номер кнопки или текст. /quit — выход. Данные этого демо временные.\n')
+          '/user 1, /user 2, /user 3 — переключить тестовый аккаунт.\n'
+          'Введите /номер кнопки или текст. /reset_demo — начать заново. /quit — выход.\n')
 
-    def show(messages):
+    def show(messages, allow_reset=True):
         nonlocal buttons
         buttons = []
         for message in messages:
@@ -307,6 +308,9 @@ def run_demo():
                     for b in row:
                         buttons.append(b)
                         print(f'  [/{len(buttons)}] {b["text"]}')
+        if allow_reset:
+            buttons.append(button('Сбросить демо', '/reset_demo'))
+            print(f'  [/{len(buttons)}] Сбросить демо')
 
     show(engine.handle(uid, '/start'))
     try:
@@ -314,6 +318,25 @@ def run_demo():
             text = input(f'\nuser {uid}> ').strip()
             if text == '/quit':
                 break
+            is_callback = text.startswith('/') and text[1:].isdigit() and 1 <= int(text[1:]) <= len(buttons)
+            if is_callback:
+                text = buttons[int(text[1:]) - 1]['payload']
+            if text == '/reset_demo':
+                reset_pending = True
+                show([reply('Сбросить демо? Все тестовые классы, коды, задания и прогресс будут удалены.',
+                            [[button('Удалить данные демо', '/confirm_demo_reset')], [button('Отмена', '/menu')]])],
+                     allow_reset=False)
+                continue
+            if reset_pending and text == '/confirm_demo_reset':
+                store.close()
+                store = Store(':memory:')
+                engine = Engine(store)
+                uid = 1
+                reset_pending = False
+                print('\nДемо сброшено.')
+                show(engine.handle(uid, '/start'))
+                continue
+            reset_pending = False
             if text.startswith('/user '):
                 try:
                     uid = int(text.split()[1])
@@ -322,9 +345,6 @@ def run_demo():
                     continue
                 show(engine.handle(uid, '/menu'))
                 continue
-            is_callback = text.startswith('/') and text[1:].isdigit() and 1 <= int(text[1:]) <= len(buttons)
-            if is_callback:
-                text = buttons[int(text[1:]) - 1]['payload']
             show(engine.handle(uid, text, is_callback=is_callback))
     except (KeyboardInterrupt, EOFError):
         pass

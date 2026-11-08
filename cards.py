@@ -299,7 +299,7 @@ def render_card(model, directory):
     elif kind=='manage':
         for a,b in (((895,245),(736,454)),((895,245),(1055,454))):
             c.line((*a,*b),'#2E6382',4)
-        for x,y,label,color,role in ((895,237,'Администратор',TEAL,'admin'),(735,450,'Учителя',BLUE,'teacher'),(1056,450,'Ученики',TEAL,'student')):
+        for x,y,label,color,role in ((895,237,'Классный руководитель',TEAL,'admin'),(735,450,'Учителя',BLUE,'teacher'),(1056,450,'Ученики',TEAL,'student')):
             c.orb(x,y,59,color,None if 'role_counts' in model else 'user')
             if 'role_counts' in model:
                 c.text((x,y),model['role_counts'].get(role,0),48,WHITE,800,anchor='mm')
@@ -358,6 +358,8 @@ def render_card(model, directory):
         c.orb(901,355,125,CORAL,'alert')
     else:
         c.hero_orbit()
+        if model.get('subject'):
+            c.paragraph((60,451),model['subject'],30,width=490,lines=2,color=TEAL,weight=800)
         if 'task_count' in model:
             c.metric((60,442),'ЗАДАНИЙ В КЛАССЕ',model['task_count'])
             c.metric((298,442),'К ЗАВТРА',f'{model.get("tomorrow_minutes",0)} мин')
