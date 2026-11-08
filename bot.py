@@ -76,7 +76,11 @@ class MaxAPI:
         if not base.startswith('https://'):
             raise ValueError('MAX_API_BASE должен использовать HTTPS.')
         self.token, self.base = token, base.rstrip('/')
-        self.context = ssl.create_default_context()
+        self.media_context = ssl.create_default_context()
+        self.context = self.media_context
+        if urllib.parse.urlsplit(self.base).hostname == 'platform-api2.max.ru':
+            self.context = ssl.create_default_context()
+            self.context.load_verify_locations(cafile=str(ROOT / 'assets/certs/max-root.crt'))
         self.last_request = 0.0
 
     def pace(self):
@@ -128,7 +132,7 @@ class MaxAPI:
         request = urllib.request.Request(upload_url, data=data, method='POST',
             headers={'Content-Type': 'multipart/form-data; boundary=' + boundary})
         try:
-            with urllib.request.urlopen(request, timeout=40, context=self.context) as response:
+            with urllib.request.urlopen(request, timeout=40, context=self.media_context) as response:
                 uploaded = json.loads(response.read())
         except urllib.error.HTTPError as exc:
             raise ApiError(exc.code) from None
